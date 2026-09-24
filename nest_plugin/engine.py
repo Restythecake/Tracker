@@ -271,6 +271,11 @@ class Engine:
         # bringt lauter "neue" Anzeigen, die nur vorher außer Reichweite waren.
         sig = signature(search, settings)
         initialized = self.store.initialized_sources(search.name, sig)
+        if not initialized:
+            row = self.store.search_state(search.name)
+            if row is not None and row["signature"] != sig:
+                # Geändert (z. B. neuer Umkreis): alte Treffer passen nicht mehr.
+                self.store.drop_matches(search.name)
         listings, errors = source.search_detailed(search)
         answered = {name for name in search.sources if name not in errors}
         error = None

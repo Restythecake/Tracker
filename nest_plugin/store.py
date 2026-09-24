@@ -198,6 +198,20 @@ class Store:
             )
             self.conn.commit()
 
+    def drop_matches(self, search: str) -> None:
+        """Löscht die Treffer einer Suche (ohne den Beobachtungs-Preise).
+
+        Eine geänderte Suche beginnt ein neues Leben: die alte Trefferliste
+        (z. B. aus einem anderen Gebiet) gehört nicht mehr dazu, und in der
+        Galerie sollen keine Anzeigen eines Umkreises hängen, der längst
+        anders eingestellt ist. Der nächste Lauf liest still neu ein.
+        """
+        with self._lock:
+            self.conn.execute("DELETE FROM matches WHERE search = ?", (search,))
+            self.conn.execute("DELETE FROM listings WHERE key NOT IN (SELECT key FROM matches)")
+            self.conn.execute("DELETE FROM runs WHERE search = ?", (search,))
+            self.conn.commit()
+
     def forget_searches_except(self, names: set[str]) -> None:
         """Gelöschte Suchen verschwinden aus den Widgets; ihre Treffer bleiben in der Historie."""
         with self._lock:

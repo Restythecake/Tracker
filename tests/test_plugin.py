@@ -308,3 +308,17 @@ def test_pc_search_notifies_only_real_deals():
     assert shown == {"1": "gut", "3": "teuer"}  # 2 nie aufgenommen, 4 versteckt
     engine.run_once()
     assert sorted(ka.loaded) == ["1", "3", "4"]  # Details je Anzeige nur einmal
+
+
+def test_changed_search_drops_old_matches(rig):
+    """Neuer Umkreis/Preis: die alten Treffer (anderes Gebiet) gehören nicht mehr zur Suche."""
+    engine, ebay, ka, client = rig
+    ebay.items = [item("ebay", 1)]
+    engine.run_once()
+    old = list(engine.store.recent_matches(limit=5, include_silent=True))
+    assert len(old) == 1
+    ebay.items = [item("ebay", 2)]
+    engine.update_settings({"searches": ["thinkpad t14 max:900 -defekt"]}, trigger=False)
+    engine.run_once()
+    shown = list(engine.store.recent_matches(limit=5, include_silent=True))
+    assert [m.listing.item_id for m in shown] == ["2"], "alte Treffer (max:600) müssen weg"
