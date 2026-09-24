@@ -1,0 +1,56 @@
+# Lässt den Tracker in GitHub Actions laufen – praktisch, wenn kein Rechner dauerhaft an ist.
+# Hinweis: GitHub-Zeitpläne sind nicht minutengenau (oft 5–15 Min. Verzögerung), und bei
+# privaten Repos verbrauchen sie Actions-Minuten. Für Echtzeit lieber lokal / auf einem Pi laufen lassen.
+#
+# Aktivieren: unten den "schedule"-Block einkommentieren und unter
+# Settings → Secrets and variables → Actions die benötigten Secrets anlegen.
+name: eBay Tracker
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "*/10 * * * *"
+
+concurrency:
+  group: ebay-tracker
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Gesehene Angebote zwischen den Läufen merken
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: seen-db-${{ github.run_id }}
+          restore-keys: seen-db-
+
+      - name: Tracker einmal ausführen
+        run: python -m ebay_tracker run --once
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data
+          key: seen-db-${{ github.run_id }}

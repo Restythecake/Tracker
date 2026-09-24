@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────
+#  eBay-Tracker – Konfiguration
+#  Geheimnisse (Tokens, Passwörter) NICHT hier eintragen, sondern
+#  als Umgebungsvariable setzen und per ${VARIABLE} referenzieren.
+# ─────────────────────────────────────────────────────────────
+
+settings:
+  marketplace: EBAY_DE        # EBAY_DE, EBAY_AT, EBAY_CH, EBAY_US, EBAY_GB, ...
+  source: auto                # auto = API wenn EBAY_CLIENT_ID/SECRET gesetzt, sonst Webseite
+  interval_minutes: 5         # wie oft geprüft wird (min. 1)
+  database: data/seen.db      # merkt sich bereits gemeldete Angebote
+  notify_on_first_run: false  # false = beim ersten Lauf nur merken, nicht alles melden
+  max_results: 50             # neueste X Angebote pro Suche prüfen
+
+notifiers:
+  console: true
+  ntfy:                       # Push aufs Handy: App "ntfy" installieren, Topic abonnieren
+    topic: ${NTFY_TOPIC}      # z. B. ein langer zufälliger Name wie "ebay-9f3k2x7q"
+  telegram:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+  discord:
+    webhook_url: ${DISCORD_WEBHOOK_URL}
+  email:
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    username: ${EMAIL_USER}
+    password: ${EMAIL_APP_PASSWORD}   # bei Gmail: App-Passwort, nicht das normale Passwort
+    to: ${EMAIL_TO}
+
+# ─────────────────────────────────────────────────────────────
+#  Suchen – eine pro gewünschter Config
+#
+#  query        Suchbegriff wie bei eBay
+#  min/max_price  Preisspanne (ohne Versand)
+#  include_all  ALLE Begriffe müssen im Titel stehen
+#  include_any  MINDESTENS EINER muss im Titel stehen
+#  exclude      KEINER darf im Titel stehen
+#  condition    any | new | used
+#  buying       all | fixed (Sofortkauf) | auction
+#  category_id  optional, eBay-Kategorie-ID
+#
+#  Schreibweise ist egal: "rtx 4070" findet auch "RTX-4070" und "rtx4070".
+#  Für genaue Regeln geht Regex mit "re:" davor, z. B. 're:\b4070\b(?!\s*ti)'
+#  (= 4070, aber nicht 4070 Ti).
+# ─────────────────────────────────────────────────────────────
+
+searches:
+  - name: Gaming-PC RTX 4070
+    query: gaming pc rtx 4070
+    min_price: 500
+    max_price: 1100
+    include_all: ["rtx 4070"]
+    include_any: ["ryzen 7", "ryzen 5", "i7", "i5"]
+    exclude: [defekt, bastler, "ohne grafikkarte", suche, tausche, "nur gehäuse"]
+    condition: any
+    buying: all
+
+  - name: ThinkPad T14 32GB
+    query: thinkpad t14 32gb
+    max_price: 600
+    include_all: [t14, 32gb]
+    exclude: [defekt, bastler, displaybruch]
+    condition: used
+    buying: fixed
