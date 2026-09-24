@@ -223,7 +223,7 @@ def test_every_widget_payload_is_valid_before_and_after_a_run(rig):
 def test_manifest_matches_widgets_and_contract():
     assert MANIFEST["apiVersion"] == "nest.plugin/v1"
     ids = {w["id"] for w in MANIFEST["widgets"]}
-    assert ids == set(WIDGETS) | {"gallery"}
+    assert ids == set(WIDGETS) | {"gallery"}  # gallery ist iframe, hat keinen Payload-Builder
     for w in MANIFEST["widgets"]:
         assert w.get("defaultSize") in w["sizes"]
     assert "widgets:iframe" in MANIFEST["scopes"]

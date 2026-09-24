@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS observed (
     at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS observed_gpu ON observed(gpu, at);
+CREATE TABLE IF NOT EXISTS restock (
+    shop        TEXT PRIMARY KEY,
+    url         TEXT,
+    name        TEXT,
+    price       REAL,
+    available   INTEGER,          -- 0/1; NULL = unklar
+    changed_at  TEXT,
+    note        TEXT
+);
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -275,6 +284,28 @@ class Store:
             return self.conn.execute(
                 "SELECT 1 FROM matches WHERE search = ? AND key = ?", (search, key)
             ).fetchone() is not None
+
+    def restock_rows(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.conn.execute("SELECT * FROM restock ORDER BY shop").fetchall()
+
+    def update_restock(self, shop: str, *, url: str, name: str, price: float | None,
+                       available: bool | None, note: str | None) -> bool:
+        """Speichert den Zustand; True, wenn er sich geändert hat."""
+        with self._lock:
+            row = self.conn.execute("SELECT available, price, note FROM restock WHERE shop = ?", (shop,)).fetchone()
+            changed = row is None or row["available"] != (None if available is None else int(available))
+            self.conn.execute(
+                """INSERT INTO restock (shop, url, name, price, available, changed_at, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(shop) DO UPDATE SET url = excluded.url, name = excluded.name,
+                       price = excluded.price, available = excluded.available,
+                       changed_at = excluded.changed_at, note = excluded.note""",
+                (shop, url, name, price, None if available is None else int(available),
+                 iso(now()) if changed else None, note),
+            )
+            self.conn.commit()
+            return changed
 
     # matches.silent: 0 = gemeldet/meldbar, 1 = still (erster Lauf oder kein Deal,
     # aber sichtbar in der Galerie), 2 = versteckt (nach Detailprüfung ungeeignet)

@@ -58,6 +58,11 @@ MANIFEST = {
             "sizes": ["3x2", "4x2", "6x2"], "defaultSize": "4x2", "refreshSeconds": 600,
         },
         {
+            "id": "restock", "kind": "status", "name": "Zelda Restock", "title": "Shops",
+            "description": "Wo es die Switch 2 Zelda-Edition (UVP 519,99 €) gerade gibt: Otto, MediaMarkt, Saturn, Amazon, Müller.",
+            "sizes": ["2x2", "3x2", "4x2"], "defaultSize": "3x2", "refreshSeconds": 300,
+        },
+        {
             "id": "gallery", "kind": "iframe", "name": "Galerie", "title": "Tracker",
             "description": "Die Angebote mit Bildern, nach Suche filterbar; Klick öffnet das Angebot.",
             "sizes": ["4x2", "6x2"], "defaultSize": "6x2",
@@ -113,6 +118,12 @@ MANIFEST = {
                 "type": "string", "enum": ["EBAY_DE", "EBAY_AT", "EBAY_CH", "EBAY_US", "EBAY_GB", "EBAY_FR",
                                            "EBAY_IT", "EBAY_ES", "EBAY_NL"],
                 "default": "EBAY_DE", "title": "eBay-Marktplatz", "x-nest-advanced": True,
+            },
+            "restock_urls": {
+                "type": "array", "items": {"type": "string"}, "title": "Restock: Shop-URLs",
+                "description": "Leer = Zelda-Edition bei Otto, MediaMarkt, Saturn, Amazon und Müller. "
+                               "Eintrag je Zeile: URL oder JSON mit kind/shop/url (siehe README).",
+                "default": [], "x-nest-advanced": True,
             },
             "ebay_client_id": {
                 "type": "string", "title": "eBay API: Client ID", "x-nest-advanced": True,

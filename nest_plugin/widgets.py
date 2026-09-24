@@ -195,10 +195,40 @@ def prices(engine: Engine, size: str | None) -> dict[str, Any]:
             "series": series}
 
 
+def restock(engine: Engine, size: str | None) -> dict[str, Any]:
+    """Shop-Verfügbarkeit der Zelda-Edition (und was sonst beobachtet wird)."""
+    rows = engine.store.restock_rows()
+    if not rows:
+        return {"kind": "status", "state": "loading", "label": "Shops",
+                "message": "Erste Shop-Prüfung läuft …"}
+    checks = []
+    worst = "ok"
+    any_unknown = False
+    for r in rows:
+        av = r["available"]
+        if av is None:
+            state, detail = "empty", (r["note"] or "unlesbar")
+            any_unknown = True
+        elif av:
+            state, detail = "ok", f"VERFÜGBAR · {int(r['price']) if r['price'] else '?'} €"
+            worst = "warn"
+        else:
+            state, detail = "empty", f"ausverkauft · {int(r['price'])} €" if r["price"] else "ausverkauft"
+        changed = parse_iso(r["changed_at"])
+        if changed and (now() - changed).total_seconds() < 6 * 3600:
+            detail += f" · geändert {ago(changed)}"
+        checks.append({"label": r["shop"], "state": state, "detail": detail[:120]})
+    if any_unknown:
+        worst = "warn"
+    payload = {"kind": "status", "state": worst, "label": "Zelda-Edition in Shops", "checks": checks}
+    return payload
+
+
 WIDGETS = {
     "overview": overview,
     "latest": latest,
     "searches": searches,
     "deals": deals,
     "prices": prices,
+    "restock": restock,
 }

@@ -64,6 +64,13 @@ Container schreiben (`apply-token`). Danach:
   eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein
   gesperrtes eBay beim ersten Lauf später keine Flut auslöst.
 
+**Zelda-Restock-Tracker** (`ebay_tracker/restock.py`, Widget *Zelda Restock*, Version 0.3.0): prüft
+bei jedem Lauf Otto (Suchseite), MediaMarkt/Saturn (Produktseite), Amazon (Buybox) und Müller
+(ld+json) auf die Switch 2 „The Legend of Zelda“-Edition. Push kommt **nur beim Wechsel** auf
+„verfügbar“ (UVP 519,99 €; Müller listet +2 %). Der Nintendo-Store ist eine Warteschlange
+(queue-it) und wird über „Warteschlange aktiv“ erkannt — der ist im Widget-Text, nicht als
+eigener Check. Eigene Shop-URLs: Einstellung „Restock: Shop-URLs“ (eine URL oder JSON je Zeile).
+
 Was beim Bauen über Nests Plugin-API aufgefallen ist: [docs/nest-plugin-bericht.md](docs/nest-plugin-bericht.md).
 
 ## Schnellstart (CLI)

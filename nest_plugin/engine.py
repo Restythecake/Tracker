@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
 import threading
 import time
@@ -21,6 +22,7 @@ from typing import Any, Callable
 from ebay_tracker.config import MARKETPLACES, Search, Settings
 from ebay_tracker.filters import rejection_reason
 from ebay_tracker.hardware import Assessment, assess, market_note, requirements_from
+from ebay_tracker.restock import UVP_SWITCH2_ZELDA, run_checks
 from ebay_tracker.models import SOURCE_LABELS, Listing
 from ebay_tracker.sources import MultiSource, create_source
 
@@ -37,6 +39,17 @@ DEFAULT_SEARCHES = [
 LEVELS = ("min", "low", "default", "high", "urgent")
 
 
+# URL None = der Checker nutzt seine eingebaute URL
+RESTOCK_TARGETS_DEFAULT = [
+    {"kind": "otto", "name": "Switch 2 Zelda Edition (Otto)", "url": None},
+    {"kind": "mm", "shop": "MediaMarkt", "name": "Switch 2 Zelda Edition (MediaMarkt)", "url": None},
+    {"kind": "mm", "shop": "Saturn", "name": "Switch 2 Zelda Edition (Saturn)", "url": None},
+    {"kind": "amazon", "name": "Switch 2 Zelda Edition (Amazon)", "url": None},
+    {"kind": "mueller", "name": "Switch 2 Zelda Edition (Müller)", "url": None},
+]
+
+
+
 @dataclass
 class PluginSettings:
     searches: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCHES))
@@ -50,6 +63,8 @@ class PluginSettings:
     ebay_marketplace: str = "EBAY_DE"
     ebay_client_id: str = ""
     ebay_client_secret: str = ""
+    # Shop-URLs für den Restock-Check (leer = eingebaute Defaults). JSON-Liste.
+    restock_urls: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "PluginSettings":
@@ -84,6 +99,9 @@ class PluginSettings:
         pick("ebay_marketplace", str, lambda v: v in MARKETPLACES)
         pick("ebay_client_id", str)
         pick("ebay_client_secret", str)
+        if raw.get("restock_urls") is not None:
+            if isinstance(raw["restock_urls"], list):
+                s.restock_urls = [str(x) for x in raw["restock_urls"]]
         return s
 
     def tracker_settings(self) -> Settings:
@@ -114,6 +132,15 @@ def format_notification(search_name: str, listing: Listing) -> tuple[str, str]:
     lines += [f"✗ {c}" for c in a.get("cons", [])[:4]]
     lines += [meta, listing.url]
     return title[:256], "\n".join(x for x in lines if x)[:4096]
+
+
+def _kind_of(url: str) -> str:
+    if "otto.de" in url: return "otto"
+    if "mediamarkt.de" in url or "saturn.de" in url: return "mm"
+    if "amazon.de" in url: return "amazon"
+    if "mueller.de" in url: return "mueller"
+    if "nintendo" in url: return "nstore"
+    return "mm"
 
 
 def signature(search: Search, settings: "PluginSettings | None" = None) -> str:
@@ -252,6 +279,7 @@ class Engine:
             })
             if random.random() < 0.05:
                 self.store.prune()
+            self._check_restock(settings)
             return summary
 
     DETAIL_BUDGET = 6  # Detailseiten je bewerteter Suche und Lauf
@@ -265,6 +293,50 @@ class Engine:
             if a.market:
                 (a.pros if " unter " in a.market else a.cons).append(a.market)
         return a
+
+    def _check_restock(self, settings: PluginSettings, *, session=None) -> None:
+        """Händler abfragen und bei Wechsel auf "verfügbar" sofort melden.
+
+        Steht nie still: ein toter Shop ist eine Logzeile, kein fehlgeschlagener
+        Suchlauf. Ohne Session (Unit-Tests) wird übersprungen.
+        """
+        if session is None and os.environ.get("TRACKER_DISABLE_RESTOCK") == "1":
+            return
+        try:
+            targets = [json.loads(u) if u.strip().startswith("{") else {"kind": _kind_of(u), "name": u, "url": u}
+                       for u in settings.restock_urls] or RESTOCK_TARGETS_DEFAULT
+        except ValueError:
+            targets = RESTOCK_TARGETS_DEFAULT
+        try:
+            result = run_checks(session=session, targets=targets)
+        except Exception:  # der Suchlauf darf am Restock-Check nicht hängen
+            log.exception("Restock-Checks fehlgeschlagen")
+            return
+        for offer in result.offers:
+            try:
+                changed = self.store.update_restock(
+                    offer.shop, url=offer.url, name=offer.name, price=offer.price,
+                    available=offer.available, note=offer.note)
+            except Exception:
+                log.exception("Restock-Speicher %s", offer.shop)
+                continue
+            if changed:
+                if offer.available:
+                    self._restock_notify(offer, settings)
+                log.info("[Restock] %s: %s", offer.shop,
+                         "VERFÜGBAR" if offer.available else ("unverkauft" if offer.available is None else "ausverkauft"))
+        for name, err in result.errors.items():
+            log.info("[Restock] %s nicht lesbar: %s", name, err)
+
+    def _restock_notify(self, offer, settings: PluginSettings) -> None:
+        title = f"🎮 {offer.shop}: {offer.name} verfügbar!"
+        body = offer.price_note
+        if offer.note:
+            body += f"\n{offer.note}"
+        body += f"\n{offer.url}"
+        res = self.client.notify(title=title[:256], body=body[:4096], level=settings.notify_level, url=offer.url)
+        if not res.ok:
+            self.nest_status = f"Restock-Meldung fehlgeschlagen: {res.error}"
 
     def _check(self, search: Search, source: MultiSource, settings: PluginSettings, summary: RunSummary) -> None:
         # Der globale Kleinanzeigen-Umkreis gehört zum Ergebnis: ein neuer Ort
