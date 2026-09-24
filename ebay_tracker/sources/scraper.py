@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -14,16 +15,23 @@ from bs4 import BeautifulSoup, Tag
 from ..config import Search, Settings
 from ..models import Listing
 from .base import SourceError
+from .http import REQUEST_ERRORS, new_session
 
 log = logging.getLogger(__name__)
 
+# Ohne die Sec-Fetch-Header und ohne vorher geholte Cookies antwortet eBay
+# (Stand 09/2026) auf die Suchseite mit 403 -- nachgemessen: gleicher User-Agent,
+# nur mit diesen Headern plus einem Besuch der Startseite gibt es 200 und Treffer.
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/18.0 Safari/605.1.15"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Dest": "document",
 }
 
 _ITEM_ID = re.compile(r"/itm/(?:[^/?#]+/)?(\d{9,15})")
@@ -120,6 +128,7 @@ def parse_results(html: str, currency: str) -> list[Listing]:
             image_url=(img.get("src") or img.get("data-src")) if img else None,
             buying_options=["AUCTION"] if is_auction else ["FIXED_PRICE"],
             shipping=shipping,
+            source="ebay",
         )
     return list(listings.values())
 
@@ -132,8 +141,22 @@ def _domain_from_href(href: str) -> str:
 class EbayScraperSource:
     def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
-        self.session = session or requests.Session()
-        self.session.headers.update(HEADERS)
+        if session is not None:  # Tests reichen eine Fake-Session rein
+            self.session = session
+            self.session.headers.update(HEADERS)
+        else:
+            self.session = new_session()
+        self._warmed_up = session is not None
+
+    def _warm_up(self) -> None:
+        """Startseite einmal besuchen, damit eBay die Session-Cookies setzt."""
+        if self._warmed_up:
+            return
+        try:
+            self.session.get(f"https://{self.settings.domain}/", timeout=20)
+        except REQUEST_ERRORS as exc:  # die Suche selbst meldet den echten Fehler
+            log.debug("eBay-Warmup fehlgeschlagen: %s", exc)
+        self._warmed_up = True
 
     def build_params(self, search: Search) -> dict[str, str]:
         params = {
@@ -160,12 +183,29 @@ class EbayScraperSource:
 
     def search(self, search: Search) -> list[Listing]:
         url = f"https://{self.settings.domain}/sch/i.html"
-        resp = self.session.get(url, params=self.build_params(search), timeout=30)
+        resp = None
+        for attempt in range(2):
+            self._warm_up()
+            try:
+                resp = self.session.get(url, params=self.build_params(search), timeout=30)
+            except REQUEST_ERRORS as exc:
+                raise SourceError(f"eBay nicht erreichbar: {exc.__class__.__name__}") from exc
+            if resp.status_code != 403:
+                break
+            # eBays Bot-Schutz hängt an den Cookies der Session: einmal mit
+            # frischer Session neu aufwärmen, dann aufgeben.
+            self._warmed_up = False
+            self.session.cookies.clear()
+            if attempt == 0:
+                time.sleep(2)
+        if resp.status_code == 403:
+            raise SourceError("eBay blockt die Anfrage (403) – später erneut oder API-Keys nutzen")
         if resp.status_code != 200:
             raise SourceError(f"eBay-Suche fehlgeschlagen ({resp.status_code})")
         if "captcha" in resp.url.lower() or "splashui/challenge" in resp.url:
             raise SourceError("eBay zeigt ein Captcha – Intervall erhöhen oder API-Keys nutzen")
-        listings = parse_results(resp.text, self.settings.currency)
-        if not listings and "srp-results" not in resp.text:
+        html = resp.content.decode("utf-8", errors="replace")
+        listings = parse_results(html, self.settings.currency)
+        if not listings and "srp-results" not in html:
             log.warning("Keine Ergebnisse gefunden – evtl. hat eBay das Seitenlayout geändert")
         return listings[: self.settings.max_results]

@@ -20,6 +20,8 @@ MARKETPLACES = {
     "EBAY_NL": ("www.ebay.nl", "EUR"),
 }
 
+KNOWN_SOURCES = ("ebay", "kleinanzeigen")
+
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -40,6 +42,11 @@ class Search:
     buying: str = "all"  # all | fixed | auction
     category_id: str | None = None
     enabled: bool = True
+    # Welche Marktplätze diese Suche abfragt (Schlüssel aus models.SOURCE_LABELS).
+    sources: list[str] = field(default_factory=lambda: ["ebay"])
+    # Nur Kleinanzeigen: Umkreissuche. None = ganz Deutschland bzw. globaler Default.
+    plz: str | None = None
+    radius_km: int | None = None
 
 
 @dataclass
@@ -52,6 +59,9 @@ class Settings:
     max_results: int = 50
     ebay_client_id: str | None = None
     ebay_client_secret: str | None = None
+    # Default-Umkreis für Kleinanzeigen, wenn eine Suche keinen eigenen nennt
+    kleinanzeigen_plz: str | None = None
+    kleinanzeigen_radius_km: int | None = None
 
     @property
     def domain(self) -> str:
@@ -111,6 +121,11 @@ def _parse_search(raw: dict[str, Any]) -> Search:
     if min_price is not None and max_price is not None and float(min_price) > float(max_price):
         raise ConfigError(f"Suche '{name}': min_price ist größer als max_price")
 
+    sources = [str(v).lower() for v in _str_list(raw.get("sources"), "sources", name)] or ["ebay"]
+    unknown = [src for src in sources if src not in KNOWN_SOURCES]
+    if unknown:
+        raise ConfigError(f"Suche '{name}': unbekannte Quelle(n) {', '.join(unknown)}")
+
     return Search(
         name=name,
         query=query,
@@ -123,6 +138,9 @@ def _parse_search(raw: dict[str, Any]) -> Search:
         buying=buying,
         category_id=str(raw["category_id"]) if raw.get("category_id") else None,
         enabled=bool(raw.get("enabled", True)),
+        sources=sources,
+        plz=str(raw["plz"]) if raw.get("plz") else None,
+        radius_km=int(raw["radius_km"]) if raw.get("radius_km") else None,
     )
 
 
@@ -144,6 +162,9 @@ def load_config(path: str | Path) -> Config:
         max_results=int(raw_settings.get("max_results", 50)),
         ebay_client_id=raw_settings.get("ebay_client_id") or os.environ.get("EBAY_CLIENT_ID"),
         ebay_client_secret=raw_settings.get("ebay_client_secret") or os.environ.get("EBAY_CLIENT_SECRET"),
+        kleinanzeigen_plz=str(raw_settings["kleinanzeigen_plz"]) if raw_settings.get("kleinanzeigen_plz") else None,
+        kleinanzeigen_radius_km=int(raw_settings["kleinanzeigen_radius_km"])
+        if raw_settings.get("kleinanzeigen_radius_km") else None,
     )
     if settings.marketplace not in MARKETPLACES:
         raise ConfigError(f"Unbekannter Marktplatz '{settings.marketplace}'. Erlaubt: {', '.join(MARKETPLACES)}")

@@ -1,7 +1,13 @@
-# eBay-Tracker
+# Tracker (eBay + Kleinanzeigen)
 
-Überwacht eBay dauerhaft nach den Configs, die du suchst, und schickt dir eine Benachrichtigung,
-sobald ein neues passendes Angebot online kommt.
+Überwacht eBay und Kleinanzeigen dauerhaft nach den Configs, die du suchst, und schickt dir eine
+Benachrichtigung, sobald ein neues passendes Angebot online kommt.
+
+Läuft auf zwei Arten:
+
+- **als Nest-Plugin** (empfohlen, siehe unten): Suchen im Nest-Einstellungsformular, Push über Nests
+  Notification-API, Widgets und eine Bilder-Galerie auf dem Nest-Desktop
+- **als eigenständiges CLI** mit `config.yaml` und ntfy/Telegram/Discord/E-Mail (Rest dieser Datei)
 
 - Beliebig viele Suchen, jeweils mit Preisspanne, Pflichtbegriffen, „einer von“-Begriffen und Ausschlusswörtern
 - Schreibweisen-tolerant (`rtx 4070` = `RTX-4070` = `rtx4070`), Regex möglich
@@ -9,7 +15,47 @@ sobald ein neues passendes Angebot online kommt.
 - Benachrichtigung per **ntfy** (Push aufs Handy), **Telegram**, **Discord**, **E-Mail** und Konsole
 - Datenquelle: offizielle **eBay Browse API** (empfohlen) oder ohne Keys direkt die eBay-Suchseite
 
-## Schnellstart
+## Als Nest-Plugin
+
+```bash
+deploy/install.sh
+```
+
+Baut das Image, startet `nest-tracker` (Label `nest.plugin=1`, Netz `nest_default`, Volume
+`tracker-data`), installiert und gibt das Plugin in Nest frei und lässt Nest den Token selbst in den
+Container schreiben (`apply-token`). Danach:
+
+- **Suchen** bearbeiten: Nest → Einstellungen → Plugins → Tracker → Einstellungen. Eine Zeile pro Suche:
+
+  ```text
+  thinkpad t14 32gb max:600 +32gb -defekt -bastler
+  name:"Gaming-PC" gaming pc rtx 4070 500-1100 +"rtx 4070" ~ryzen ~i7 -defekt @kleinanzeigen plz:10115 umkreis:50
+  ```
+
+  | Token | Bedeutung |
+  | --- | --- |
+  | Wörter | Suchbegriff beim Marktplatz |
+  | `+wort`, `+"a b"` | muss im Titel stehen |
+  | `~wort` | mindestens eines davon |
+  | `-wort` | darf nicht vorkommen |
+  | `max:600`, `min:150`, `150-600`, `<600` | Preis |
+  | `@ebay`, `@kleinanzeigen` / `@ka` | nur diese Quelle (sonst beide) |
+  | `plz:10115 umkreis:30` | Kleinanzeigen-Umkreis für diese Suche |
+  | `zustand:neu\|gebraucht`, `kauf:sofort\|auktion` | eBay-Filter |
+  | `name:"…"` | Anzeigename |
+  | `//` am Anfang | Suche pausieren |
+
+- **Widgets** auf dem Desktop: *Neue Treffer* (stat), *Neueste Treffer* (list), *Suchen* (status),
+  *Angebote* (table), *Preisverlauf* (chart) und *Galerie* (iframe mit Bildern; „Alles ansehen ↗“
+  öffnet die Vollbild-Seite).
+- **Aktionen** auf der Plugin-Seite: *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
+- **Push**: jeder neue Treffer einzeln (Tippen öffnet das Angebot), ab `max_notifications` pro Lauf
+  eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein
+  gesperrtes eBay beim ersten Lauf später keine Flut auslöst.
+
+Was beim Bauen über Nests Plugin-API aufgefallen ist: [docs/nest-plugin-bericht.md](docs/nest-plugin-bericht.md).
+
+## Schnellstart (CLI)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate

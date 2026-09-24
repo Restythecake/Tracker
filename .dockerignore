@@ -1,0 +1,8 @@
+.git
+.venv
+.alma-snapshots
+data
+tests
+docs
+**/__pycache__
+*.pyc

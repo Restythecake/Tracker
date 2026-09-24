@@ -52,7 +52,7 @@ class Tracker:
                 log.debug("[%s] verworfen (%s): %s", search.name, reason, listing.title)
                 continue
             result.matched += 1
-            if self.storage.is_seen(search.name, listing.item_id):
+            if self.storage.is_seen(search.name, listing.key):
                 continue
             result.new += 1
             notified = False

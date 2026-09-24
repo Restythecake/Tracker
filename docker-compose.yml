@@ -1,0 +1,32 @@
+# Tracker-Plugin für Nest.
+#
+#   docker compose up -d --build
+#
+# Danach in Nest: Einstellungen → Plugins → Suchen → "Tracker" installieren und
+# freigeben, dann "Token übernehmen" (baut den Container mit NEST_PLUGIN_TOKEN
+# neu). Oder deploy/install.sh, das genau diese Schritte per API macht.
+services:
+  tracker:
+    build: .
+    image: nest-tracker:latest
+    container_name: nest-tracker
+    restart: unless-stopped
+    labels:
+      nest.plugin: "1"
+      nest.plugin.id: arthur.tracker
+    environment:
+      NEST_PLUGIN_URL: http://nest:8080/api/plugin/v1
+      NEST_DASHBOARD_ORIGIN: https://nest.mini.shibusa.moe
+      TZ: Europe/Berlin
+    volumes:
+      - tracker-data:/data
+    networks:
+      - nest
+
+volumes:
+  tracker-data:
+
+networks:
+  nest:
+    name: nest_default
+    external: true

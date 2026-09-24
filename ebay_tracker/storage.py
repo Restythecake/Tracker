@@ -59,7 +59,7 @@ class Storage:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 search_name,
-                listing.item_id,
+                listing.key,
                 listing.title,
                 listing.price,
                 listing.url,
