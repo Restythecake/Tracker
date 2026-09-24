@@ -55,6 +55,8 @@ class Search:
     evaluate: str | None = None
     min_gpu: str | None = None
     min_ram: int | None = None
+    # bewertung:pc -- nur melden, wenn Preis <= dieses Verhältnis des Teilewerts (0-1)
+    min_deal: float | None = None
 
     @property
     def all_queries(self) -> list[str]:

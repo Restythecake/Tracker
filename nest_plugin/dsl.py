@@ -25,6 +25,7 @@ jede Suche eine Zeile in einer kleinen Syntax, die man ohne Anleitung lesen kann
 | ``kat:pc``                | nur Kategorie PCs                                |
 | ``bewertung:pc``          | Hardware lesen, Preis bewerten, nur Deals melden |
 | ``gpu:3080``              | mit Bewertung: mindestens diese Grafikkarten-Klasse |
+| ``deal:0.8``              | mit Bewertung: nur melden, wenn ≤ 80 % des Teilewerts |
 | ``ram:32``                | mit Bewertung: mindestens so viel RAM            |
 | ``//`` am Anfang          | Suche pausiert                                   |
 
@@ -94,6 +95,7 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
     evaluate = None
     min_gpu = None
     min_ram = None
+    min_deal = None
     groups: list[list[str]] = [[]]
 
     for tok in _tokens(raw):
@@ -146,9 +148,17 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
                         raise ValueError
                     category = "pc"
                 elif key in ("bewertung", "check", "profil"):
-                    if value.lower() not in ("pc", "gaming-pc", "gamingpc"):
+                    value = value.lower()
+                    if value in ("pc", "gaming-pc", "gamingpc"):
+                        evaluate, category = "pc", "pc"
+                    elif value in ("ram", "speicher"):
+                        evaluate = "ram"
+                    else:
                         raise ValueError
-                    evaluate = "pc"
+                elif key in ("deal", "maxratio"):
+                    min_deal = float(_num(value))
+                    if not 0.2 <= min_deal <= 1.5:
+                        raise ValueError
                 elif key in ("gpu", "mingpu", "grafik"):
                     from ebay_tracker.hardware import find_gpu
                     if not find_gpu(value.lower()):
@@ -171,10 +181,12 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
     if not query:
         result.error = "kein Suchbegriff (nur Filter angegeben)"
         return result
-    if evaluate and category is None:
+    if evaluate == "pc" and category is None:
         category = "pc"  # eine PC-Bewertung ohne PC-Kategorie wäre voller Einzelteile
-    if (min_gpu or min_ram) and not evaluate:
+    if (min_gpu or min_ram) and evaluate != "pc":
         result.warnings.append("gpu:/ram: wirken nur zusammen mit bewertung:pc")
+    if min_deal is not None and not evaluate:
+        result.warnings.append("deal: wirkt nur zusammen mit bewertung")
     if min_price is not None and max_price is not None and min_price > max_price:
         min_price, max_price = max_price, min_price
         result.warnings.append("min/max vertauscht")
@@ -199,6 +211,7 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
         min_gpu=min_gpu,
         min_ram=min_ram,
     )
+    result.search.min_deal = min_deal
     return result
 
 

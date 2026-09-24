@@ -278,6 +278,7 @@ class DetailSource(FakeSource):
         self.loaded.append(listing.item_id)
         for k, v in self.details.get(listing.item_id, {}).items():
             setattr(listing, k, v)
+        listing.details_loaded = True  # wie parse_details im echten Quellcode
 
 
 def pc(source, n, title, price):

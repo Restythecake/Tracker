@@ -1,3 +1,3 @@
 """Tracker als Nest-Plugin (Docker-Laufzeit, nest.plugin/v1)."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.1"

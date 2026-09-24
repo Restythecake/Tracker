@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 from ebay_tracker.config import MARKETPLACES, Search, Settings
 from ebay_tracker.filters import rejection_reason
-from ebay_tracker.hardware import Assessment, assess, market_note, requirements_from
+from ebay_tracker.hardware import Assessment, assess, assess_ram, market_note, requirements_from
 from ebay_tracker.restock import UVP_SWITCH2_ZELDA, run_checks
 from ebay_tracker.models import SOURCE_LABELS, Listing
 from ebay_tracker.sources import MultiSource, create_source
@@ -33,8 +33,11 @@ from .store import Store, iso, now
 log = logging.getLogger(__name__)
 
 DEFAULT_SEARCHES = [
-    'name:"Gaming-PC bis 1000 €" gaming pc | pc rtx 400-1000 bewertung:pc zustand:gebraucht kauf:sofort '
-    '-defekt -bastler',
+    'name:"Gaming-PC bis 1000 €" gaming pc | pc rtx 400-1000 bewertung:pc deal:0.9 '
+    'zustand:gebraucht kauf:sofort -defekt -bastler',
+    'name:"GPU-Schnäppchen im Paket" pc rtx | pc rx | gaming pc bewertung:pc deal:0.78 '
+    'zustand:gebraucht kauf:sofort -defekt -bastler',
+    'name:"RAM unter Marktwert" ddr4 | ddr5 bewertung:ram 64gb | 96gb | 128gb -defekt -server',
 ]
 LEVELS = ("min", "low", "default", "high", "urgent")
 
@@ -361,7 +364,11 @@ class Engine:
             if rejection_reason(listing, search) is not None:
                 continue
             a = None
-            if search.evaluate:
+            if search.evaluate == "ram":
+                a = assess_ram(listing.title, listing.price, description=listing.description or "")
+                if not a.ok:
+                    continue
+            elif search.evaluate == "pc":
                 a = self._assess(search, listing)
                 if a.specs.gpu and listing.price:
                     self.store.observe(listing.key, a.specs.gpu, listing.price)
@@ -372,17 +379,49 @@ class Engine:
         new = silent_new = 0
         budget = self.DETAIL_BUDGET
         for listing, a in matched:
-            if self.store.is_matched(search.name, listing.key):
+            already = self.store.is_matched(search.name, listing.key)
+            if already and search.evaluate != "pc":
                 self.store.upsert_listing(listing)  # Preis kann sich geändert haben
                 continue
             # Still, solange diese Quelle für diese Suche noch nie eingelesen wurde
             silent: int = int(not settings.notify_first_run and listing.source not in initialized)
-            if a is not None and not silent:
-                if budget > 0:
+            if already:
+                # PC-Bewertung läuft weiter: Details könnten inzwischen geladen
+                # sein (Budget) oder eine deal:-Schwelle stuft den Preis neu ein.
+                # add_match senkt silent nur (MIN) -- einmal gemeldet bleibt gemeldet.
+                if search.evaluate == "pc":
+                    if budget > 0 and not silent and not listing.details_loaded:
+                        budget -= 1
+                        self.pause(random.uniform(0.8, 1.8))
+                        source.load_details(listing)
+                    a = self._assess(search, listing, with_market=True)
+                    if a.ok and search.min_deal is not None and a.ratio is not None \
+                            and a.ratio > search.min_deal and a.verdict != "verdaechtig":
+                        silent = 1
+                    listing.assessment = a.to_dict()
+                self.store.upsert_listing(listing)
+                self.store.add_match(search.name, listing, silent=silent)
+                if silent:
+                    silent_new += 1
+                else:
+                    new += 1
+                continue
+            elif a is not None and not silent:
+                if budget > 0 and search.evaluate == "pc":
+                    # RAM-Einzelteile brauchen keine Detailseite: der Titel nennt
+                    # Kit-Größe und DDR-Generation, Zustand ist zweitrangig.
                     budget -= 1
                     self.pause(random.uniform(0.8, 1.8))
                     source.load_details(listing)
-                a = self._assess(search, listing, with_market=True)
+                if search.evaluate == "ram":
+                    a = assess_ram(listing.title, listing.price, description=listing.description or "")
+                else:
+                    a = self._assess(search, listing, with_market=True)
+                if a.ok and search.min_deal is not None and a.ratio is not None:
+                    # deal:0.75 -- der Nutzer will nur die echten Schnäppchen;
+                    # alles darüber bleibt in der Galerie (silent=1).
+                    if a.ratio > search.min_deal and a.verdict not in ("verdaechtig",):
+                        silent = 1
                 if not a.ok:
                     silent = 2  # z. B. "Zustand Neu" oder RAM zu klein laut Beschreibung
                 elif not a.notify_worthy:

@@ -76,8 +76,12 @@ MAX_VRAM = {
 _NV_NUMBERS = sorted({k[:4] for k in GPUS if k[:4].isdigit()})
 
 # ------------------------------------------------------------------ RAM etc.
-RAM_SIZES = (8, 12, 16, 24, 32, 48, 64, 96, 128)
-RAM_EUR_PER_GB = 2.5
+RAM_SIZES = (8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256)
+# Gebrauchtpreise je GB, Stand Herbst 2026: DDR4 läuft aus und ist billig,
+# DDR5 (6000er) liegt deutlich darüber. Server-RAM (ECC/RDIMM) ist fast nichts wert.
+RAM_EUR_PER_GB_DDR4 = 2.2
+RAM_EUR_PER_GB_DDR5 = 3.2
+RAM_EUR_PER_GB_SERVER = 0.8
 BASE_REST = 170  # Gehäuse, Netzteil, Kühler, Mainboard-Grundwert ohne CPU-Plattform
 SSD_EUR_PER_TB = 40
 
@@ -344,10 +348,29 @@ def platform_value(cpu_score: int | None) -> int:
     return 80
 
 
-def fair_price(specs: Specs) -> int | None:
+def ram_kind(text: str) -> str:
+    """ddr4 | ddr5 | server | ddr3."""
+    t = text.lower()
+    if "ecc" in t or "rdimm" in t or "server" in t:
+        return "server"
+    if re.search(r"\bddr5\b|\bddr5\b", t):
+        return "ddr5"
+    if re.search(r"\bddr4\b", t):
+        return "ddr4"
+    if re.search(r"\bddr3\b", t):
+        return "ddr3"
+    return "ddr4"  # ohne Angabe: konservativ DDR4 annehmen
+
+
+def ram_price_per_gb(kind: str) -> float:
+    return {"ddr5": RAM_EUR_PER_GB_DDR5, "ddr4": RAM_EUR_PER_GB_DDR4, "server": RAM_EUR_PER_GB_SERVER,
+            "ddr3": 0.5}[kind]
+
+
+def fair_price(specs: Specs, *, text: str = "") -> int | None:
     if not specs.gpu_price:
         return None
-    ram = (specs.ram_gb or 16) * RAM_EUR_PER_GB
+    ram = (specs.ram_gb or 16) * ram_price_per_gb(ram_kind(text))
     ssd = (specs.ssd_tb or 0.5) * SSD_EUR_PER_TB
     return int(round(specs.gpu_price + platform_value(specs.cpu_score) + ram + BASE_REST + ssd, -1))
 
@@ -372,6 +395,59 @@ def requirements_from(min_gpu: str | None, min_ram: int | None) -> Requirements:
     return req
 
 
+def assess_ram(title: str, price: float | None, *, description: str = "",
+               market: list[float] | None = None) -> Assessment:
+    """Einzelne RAM-Kits: fairer Wert aus Groesse x Generation.
+
+    Arthur will 64-GB-Kits deutlich unter Marktpreis. "Unter dem Markt" ist
+    konservativ: unter 65 % des ueblichen Gebrauchtpreises ist es ein Deal.
+    """
+    specs = extract_specs(title, description)
+    text = _norm(title + " " + description)
+    kind = ram_kind(text)
+    if specs.ram_gb is None or specs.ram_gb < 16:
+        return Assessment(False, "ungeeignet", "RAM-Groesse nicht erkennbar oder unter 16 GB", None, None, specs)
+    if specs.gpu is not None:
+        # Ein PC, kein RAM-Einzelteil -- der gehoert in die PC-Suche
+        return Assessment(False, "ungeeignet", "verbauter PC, kein RAM-Einzelteil", None, None, specs)
+    per_gb = ram_price_per_gb(kind)
+    fair = int(round(specs.ram_gb * per_gb, -1))
+    pros = [f"{specs.ram_gb} GB {kind.upper()}"]
+    cons: list[str] = []
+    if kind == "ddr5":
+        speed = re.search(r"(\d{4,5})\s*(?:mhz|mt)|ddr5-?(\d{4,5})", text)
+        speed_val = next((g for g in speed.groups() if g), None) if speed else None
+        if speed_val and int(speed_val) >= 6000:
+            pros.append(f"{speed_val} MHz - schnell")
+        if re.search(r"cl\s*30\b|cl\s*32\b", text):
+            pros.append("niedrige Latenz (CL30/32)")
+    if re.search(r"\b(ecc|rdimm)\b", text):
+        cons.append("ECC/Server-RAM - laeuft nicht in jedem Desktop-Board")
+    if "so-dimm" in text or "sodimm" in text:
+        pros.append("SO-DIMM (Laptop)")
+    if price is None or price <= 0:
+        a = Assessment(True, "fair", None, fair, None, specs, pros, cons + ["Preis fehlt (VB?)"])
+        a.market = market_note(price, market)
+        return a
+    ratio = price / fair
+    if price < fair * 0.40:
+        verdict = "verdaechtig"
+        cons.insert(0, "unrealistisch billig - Betrugs- oder Defektverdacht")
+    elif ratio <= 0.65:
+        verdict = "top"
+    elif ratio <= 0.85:
+        verdict = "gut"
+    elif ratio <= 1.0:
+        verdict = "fair"
+    else:
+        verdict = "teuer"
+    diff = int(round((ratio - 1) * 100))
+    (pros if diff <= 0 else cons).append(f"{abs(diff)} % {'unter' if diff <= 0 else 'ueber'} Marktwert (~{fair} EUR)")
+    a = Assessment(True, verdict, None, fair, round(ratio, 3), specs, pros, cons)
+    a.market = market_note(price, market)
+    return a
+
+
 def assess(title: str, price: float | None, *, description: str = "", req: Requirements | None = None,
            new: bool | None = None, dealer: bool = False, market: list[float] | None = None) -> Assessment:
     req = req or Requirements()
@@ -382,7 +458,7 @@ def assess(title: str, price: float | None, *, description: str = "", req: Requi
     cons: list[str] = []
 
     def reject(reason: str, verdict: str = "ungeeignet") -> Assessment:
-        return Assessment(False, verdict, reason, fair_price(specs), None, specs, pros, cons)
+        return Assessment(False, verdict, reason, fair_price(specs, text=text), None, specs, pros, cons)
 
     for pattern, label in REJECT_TERMS.items():
         if re.search(pattern, _norm(title)):
@@ -429,7 +505,7 @@ def assess(title: str, price: float | None, *, description: str = "", req: Requi
         cons.append("als „neu“ beworben")
 
     # --- Preis
-    fair = fair_price(specs)
+    fair = fair_price(specs, text=text)
     if price is None or price <= 0 or fair is None:
         a = Assessment(True, "fair", None, fair, None, specs, pros, cons + ["Preis fehlt (VB?)"])
         a.market = market_note(price, market)

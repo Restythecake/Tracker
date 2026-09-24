@@ -312,8 +312,12 @@ class Store:
     def add_match(self, search: str, listing: Listing, *, silent: bool | int) -> None:
         with self._lock:
             self.upsert_listing(listing)
+            # INSERT OR IGNORE: first_seen ist "zum ersten Mal gesehen" und bleibt.
+            # Beim zweiten Lauf kann silent sinken (Deal-Schwelle fällt, Details
+            # nachgeladen) -- aber niemals steigen: einmal gemeldet bleibt gemeldet.
             self.conn.execute(
-                "INSERT OR IGNORE INTO matches (search, key, first_seen, notified, silent) VALUES (?, ?, ?, 0, ?)",
+                """INSERT INTO matches (search, key, first_seen, notified, silent) VALUES (?, ?, ?, 0, ?)
+                   ON CONFLICT(search, key) DO UPDATE SET silent = MIN(matches.silent, excluded.silent)""",
                 (search, listing.key, iso(now()), int(silent)),
             )
 
