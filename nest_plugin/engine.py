@@ -116,9 +116,11 @@ def format_notification(search_name: str, listing: Listing) -> tuple[str, str]:
     return title[:256], "\n".join(x for x in lines if x)[:4096]
 
 
-def signature(search: Search) -> str:
+def signature(search: Search, settings: "PluginSettings | None" = None) -> str:
     """Was das Ergebnis einer Suche bestimmt. Name und Pause gehören nicht dazu."""
     data = asdict(search)
+    if settings is not None and "kleinanzeigen" in search.sources and not search.plz:
+        data["_ka_area"] = [settings.kleinanzeigen_plz, settings.kleinanzeigen_radius]
     data.pop("name", None)
     data.pop("enabled", None)
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
@@ -265,7 +267,9 @@ class Engine:
         return a
 
     def _check(self, search: Search, source: MultiSource, settings: PluginSettings, summary: RunSummary) -> None:
-        sig = signature(search)
+        # Der globale Kleinanzeigen-Umkreis gehört zum Ergebnis: ein neuer Ort
+        # bringt lauter "neue" Anzeigen, die nur vorher außer Reichweite waren.
+        sig = signature(search, settings)
         initialized = self.store.initialized_sources(search.name, sig)
         listings, errors = source.search_detailed(search)
         answered = {name for name in search.sources if name not in errors}

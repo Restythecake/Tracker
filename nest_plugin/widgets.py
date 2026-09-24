@@ -9,7 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from ebay_tracker.models import format_money
+import json
+
+from ebay_tracker.models import SOURCE_LABELS, format_money
 
 from .engine import Engine
 from .store import iso, now, parse_iso
@@ -82,39 +84,41 @@ def overview(engine: Engine, size: str | None) -> dict[str, Any]:
     return payload
 
 
-def _subtitle(listing) -> str:
+SHORT_VERDICT = {"top": "Top-Deal", "gut": "Gut", "fair": "Fair", "teuer": "Teuer", "verdaechtig": "Verdacht"}
+
+
+def _headline(listing) -> str:
+    """Eine Zeile, weil Nest von einem Listeneintrag nur title + meta zeigt."""
     a = listing.assessment or {}
-    parts = [listing.price_text, a.get("label"), a.get("summary"), listing.source_label]
-    if listing.location:
-        parts.append(listing.location)
-    return " · ".join(p for p in parts if p)
+    if a.get("summary"):
+        return f"{listing.price_text} · {a['summary']}"
+    return f"{listing.price_text} · {listing.title}"
 
 
 def latest(engine: Engine, size: str | None) -> dict[str, Any]:
     if not engine.searches:
         return _no_searches()
     rows = LIST_ROWS.get(size or "", 4)
-    matches = engine.recent_matches(limit=rows)
+    # Alles Sichtbare, nicht nur Gemeldetes: "Fair" gehört in die Übersicht,
+    # auch wenn es kein Push wert war.
+    matches = engine.recent_matches(limit=rows, include_silent=True)
     if not matches:
-        tracked = engine.store.count_tracked()
-        msg = (f"Noch nichts Neues. {tracked} passende Angebote sind schon bekannt und werden nicht erneut gemeldet."
-               if tracked else "Noch nichts gefunden – die erste Suche läuft gleich.")
-        return {"kind": "list", "state": "empty", "title": "Neueste Treffer", "message": msg, "items": []}
-    return {
-        "kind": "list", "state": "ok", "title": "Neueste Treffer",
-        "items": [
-            {"id": m.key + "@" + m.search, "title": m.listing.title, "subtitle": _subtitle(m.listing),
-             "meta": ago(m.first_seen), "state": "ok"}
-            for m in matches
-        ],
-    }
+        return {"kind": "list", "state": "empty", "title": "Neueste Treffer", "items": [],
+                "message": "Noch nichts Passendes gefunden – die Suchen laufen weiter."}
+    items = []
+    for m in matches:
+        a = m.listing.assessment or {}
+        verdict = a.get("verdict")
+        state = {"top": "ok", "gut": "ok", "teuer": "warn", "verdaechtig": "warn"}.get(verdict, "ok")
+        items.append({"id": m.key + "@" + m.search, "title": _headline(m.listing),
+                      "meta": SHORT_VERDICT.get(verdict) or ago(m.first_seen), "state": state})
+    return {"kind": "list", "state": "ok", "title": "Neueste Treffer", "items": items}
 
 
 def searches(engine: Engine, size: str | None) -> dict[str, Any]:
     if not engine.parsed:
         return _no_searches()
     states = engine.store.all_search_states()
-    day = now() - timedelta(hours=24)
     checks = []
     worst = "ok"
     for p in engine.parsed:
@@ -130,14 +134,14 @@ def searches(engine: Engine, size: str | None) -> dict[str, Any]:
         if row is None or row["last_run"] is None:
             checks.append({"label": s.name, "state": "loading", "detail": "wartet auf ersten Lauf"})
             continue
-        new_today = len(engine.recent_matches(limit=100, search=s.name, since=day))
-        detail = f"{row['last_matched']} passend · {new_today} neu heute · {ago(parse_iso(row['last_run']))}"
+        # Kurz halten: Nest zeigt detail ungekürzt rechts neben dem Namen
+        detail = f"{row['last_matched']} passend"
         if row["last_error"]:
-            checks.append({"label": s.name, "state": "error", "detail": row["last_error"][:120]})
+            checks.append({"label": s.name, "state": "error", "detail": "Fehler"})
             worst = "warn"
         elif row["source_errors"]:
-            checks.append({"label": s.name, "state": "warn",
-                           "detail": detail + " · eine Quelle hakt"})
+            broken = ", ".join(SOURCE_LABELS.get(k, k) for k in json.loads(row["source_errors"]))
+            checks.append({"label": s.name, "state": "warn", "detail": f"{detail} · {broken} hakt"})
             worst = "warn"
         else:
             checks.append({"label": s.name, "state": "ok", "detail": detail})
@@ -155,23 +159,21 @@ def deals(engine: Engine, size: str | None) -> dict[str, Any]:
         {"key": "title", "label": "Angebot"},
         {"key": "price", "label": "Preis", "align": "right"},
         {"key": "verdict", "label": "Urteil"},
-        {"key": "source", "label": "Quelle"},
         {"key": "age", "label": "Gefunden", "align": "right"},
     ]
-    if size == "6x2":
+    if size == "6x2" and len(engine.searches) > 1:
         columns.insert(3, {"key": "search", "label": "Suche"})
     if not matches:
         return {"kind": "table", "state": "empty", "title": "Passende Angebote",
                 "message": "Noch keine passenden Angebote.", "columns": columns, "rows": []}
-    return {
-        "kind": "table", "state": "ok", "title": "Passende Angebote", "columns": columns,
-        "rows": [
-            {"title": m.listing.title[:70], "price": m.listing.price_text, "source": m.listing.source_label,
-             "search": m.search, "age": ago(m.first_seen),
-             "verdict": (m.listing.assessment or {}).get("label") or "–"}
-            for m in matches
-        ],
-    }
+    rows = []
+    for m in matches:
+        a = m.listing.assessment or {}
+        src = "KA" if m.listing.source == "kleinanzeigen" else "eBay"
+        rows.append({"title": f"{a.get('summary') or m.listing.title[:60]} ({src})",
+                     "price": m.listing.price_text, "verdict": SHORT_VERDICT.get(a.get("verdict"), "–"),
+                     "search": m.search, "age": ago(m.first_seen).replace("vor ", "")})
+    return {"kind": "table", "state": "ok", "title": "Passende Angebote", "columns": columns, "rows": rows}
 
 
 def prices(engine: Engine, size: str | None) -> dict[str, Any]:
@@ -181,11 +183,11 @@ def prices(engine: Engine, size: str | None) -> dict[str, Any]:
     series = []
     for s in engine.active_searches:
         points = engine.store.price_series(s.name, since)
-        if points:
+        if len(points) >= 2:
             series.append({"name": s.name, "points": [{"t": iso(t), "v": round(v, 2)} for t, v in points]})
     if not series:
         return {"kind": "chart", "state": "empty", "label": "Preisverlauf",
-                "message": "Noch keine Preise – nach ein paar Läufen steht hier der Median je Suche.",
+                "message": "Sammelt noch – ab dem zweiten Lauf steht hier der Median-Preis je Suche.",
                 "series": []}
     latest_values = [f"{x['name']}: {format_money(x['points'][-1]['v'])}" for x in series[:2]]
     return {"kind": "chart", "state": "ok", "label": "Median-Preis passender Angebote", "unit": "€",
