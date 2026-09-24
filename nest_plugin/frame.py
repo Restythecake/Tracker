@@ -83,7 +83,15 @@ a{color:inherit;text-decoration:none}
 .name{font-size:12.5px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
   overflow:hidden;overflow-wrap:anywhere}
 .strip .name{-webkit-line-clamp:1}
+.strip .specs + .name{display:none}
 .meta{color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.specs{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.verdict{position:absolute;left:8px;bottom:8px;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;color:#fff}
+.verdict.top{background:#16a34a}.verdict.gut{background:#22a06b}.verdict.fair{background:#5b6472}
+.verdict.teuer{background:#8a5a2b}.verdict.verdaechtig{background:#d97706}
+.pc{list-style:none;margin:6px 0 0;padding:0;font-size:11.5px;line-height:1.4}
+.pc li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pc .p{color:var(--ok)}.pc .c{color:var(--warn)}
 .empty{flex:1;display:grid;place-items:center;text-align:center;color:var(--mut);padding:10px 24px}
 .empty b{display:block;color:var(--fg);font-size:15px;margin-bottom:4px}
 /* ---------- Vollbild-Seite ---------- */
@@ -157,18 +165,27 @@ def _qs(**params: Any) -> str:
     return "/?" + urlencode(clean) if clean else "/"
 
 
-def _card(m: Match, *, fresh_hours: int = 24) -> str:
+def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
     l = m.listing
+    a = l.assessment or {}
     is_new = not m.silent and m.first_seen and (now() - m.first_seen) < timedelta(hours=fresh_hours)
     img = (f"<img src='/img/{quote(m.key, safe='')}' alt='' loading=lazy>" if l.image_url
            else "<div class=ph>▢</div>")
     meta = " · ".join(x for x in (l.location, ago(m.first_seen)) if x)
     new_badge = "<span class='badge new'>Neu</span>" if is_new else ""
+    verdict = (f"<span class='verdict {esc(a.get('verdict'))}'>{esc(a.get('label'))}</span>"
+               if a.get("verdict") else "")
+    specs = f"<div class=specs>{esc(a.get('summary'))}</div>" if a.get("summary") else ""
+    points = ""
+    if detail and a:
+        items = [f"<li class=p>✓ {esc(x)}</li>" for x in a.get("pros", [])[1:4]]
+        items += [f"<li class=c>✗ {esc(x)}</li>" for x in a.get("cons", [])[:3]]
+        points = f"<ul class=pc>{''.join(items)}</ul>" if items else ""
     return (
         f"<a class=card href='{esc(l.url)}' data-open='/go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
-        f"<div class=img>{img}<span class=badge>{esc(l.source_label)}</span>{new_badge}</div>"
-        f"<div class=body><div class=price>{esc(l.price_text)}</div>"
-        f"<div class=name>{esc(l.title)}</div><div class=meta>{esc(meta)}</div></div></a>"
+        f"<div class=img>{img}<span class=badge>{esc(l.source_label)}</span>{new_badge}{verdict}</div>"
+        f"<div class=body><div class=price>{esc(l.price_text)}</div>{specs}"
+        f"<div class=name>{esc(l.title)}</div><div class=meta>{esc(meta)}</div>{points}</div></a>"
     )
 
 
@@ -200,7 +217,7 @@ def widget(engine: Engine, params: dict[str, str]) -> str:
     if not engine.running and engine.next_run_at:
         when += f" · nächste {until(engine.next_run_at)}"
 
-    matches = engine.store.recent_matches(limit=24, search=sel or None, include_silent=True)
+    matches = engine.recent_matches(limit=24, search=sel or None, include_silent=True)
     if not engine.searches:
         content = ("<div class=empty><div><b>Noch keine Suche</b>In Nest → Plugins → Tracker → Einstellungen "
                    "eine Zeile wie <code>thinkpad t14 max:600 -defekt</code> anlegen.</div></div>")
@@ -229,8 +246,8 @@ def page(engine: Engine, params: dict[str, str]) -> str:
     day = now() - timedelta(hours=24)
     last = engine.store.get_meta("last_run") or {}
     stats = [
-        (str(engine.store.count_new_since(day)), "neue Treffer in 24 h"),
-        (str(engine.store.count_new_since(now() - timedelta(days=7))), "neue Treffer in 7 Tagen"),
+        (str(engine.count_new_since(day)), "neue Treffer in 24 h"),
+        (str(engine.count_new_since(now() - timedelta(days=7))), "neue Treffer in 7 Tagen"),
         (str(len(engine.active_searches)), "aktive Suchen"),
         (ago(parse_iso(last.get("finished"))) if last else "–", "zuletzt geprüft"),
     ]
@@ -278,8 +295,8 @@ def page(engine: Engine, params: dict[str, str]) -> str:
     chips = [f"<a class='chip {'on' if not sel else ''}' href='{_qs(layout='page')}'>Alle</a>"]
     chips += [f"<a class='chip {'on' if n == sel else ''}' href='{esc(_qs(layout='page', s=n))}'>{esc(n)}</a>"
               for n in names]
-    matches = engine.store.recent_matches(limit=120, search=sel or None, include_silent=True)
-    grid = ("<div class=grid>" + "".join(_card(m) for m in matches) + "</div>") if matches else \
+    matches = engine.recent_matches(limit=120, search=sel or None, include_silent=True)
+    grid = ("<div class=grid>" + "".join(_card(m, detail=True) for m in matches) + "</div>") if matches else \
         "<div class=srch><div class=m>Noch keine passenden Angebote.</div></div>"
 
     body = (

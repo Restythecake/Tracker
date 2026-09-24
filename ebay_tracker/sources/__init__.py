@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from ..config import Search, Settings
 from ..models import SOURCE_LABELS, Listing
@@ -35,10 +36,24 @@ class MultiSource:
     wirft nur, wenn *alle* Quellen gescheitert sind. ``search_detailed`` liefert
     die Fehler je Quelle zusätzlich, damit eine Oberfläche "eBay blockt gerade,
     Kleinanzeigen läuft" sagen kann statt "Suche kaputt".
+
+    Sperrt ein Marktplatz (403/Captcha), wird er ``cooldown`` Sekunden lang
+    nicht mehr gefragt. Weiter anzuklopfen verlängert die Sperre nur.
     """
 
-    def __init__(self, sources: dict[str, Source]):
+    def __init__(self, sources: dict[str, Source], cooldown: float = 1800, clock=time.monotonic):
         self.sources = sources
+        self.cooldown = cooldown
+        self.clock = clock
+        self.blocked_until: dict[str, float] = {}
+
+    def paused(self, name: str) -> float:
+        """Restsekunden der Pause (0 = aktiv)."""
+        return max(0.0, self.blocked_until.get(name, 0) - self.clock())
+
+    def _note_error(self, name: str, exc: Exception) -> None:
+        if getattr(exc, "blocked", False):
+            self.blocked_until[name] = self.clock() + self.cooldown
 
     def search_detailed(self, search: Search) -> tuple[list[Listing], dict[str, str]]:
         listings: list[Listing] = []
@@ -48,9 +63,13 @@ class MultiSource:
             if source is None:
                 errors[name] = f"Quelle '{name}' ist nicht eingerichtet"
                 continue
+            if rest := self.paused(name):
+                errors[name] = f"gesperrt – Pause noch {int(rest // 60) + 1} min"
+                continue
             try:
                 listings.extend(source.search(search))
             except Exception as exc:  # jede Quelle ist fremder Code gegen eine fremde Webseite
+                self._note_error(name, exc)
                 errors[name] = str(exc) or exc.__class__.__name__
                 log.error("[%s] %s fehlgeschlagen: %s", search.name, SOURCE_LABELS.get(name, name), exc)
         return listings, errors
@@ -60,6 +79,20 @@ class MultiSource:
         if errors and len(errors) == len(search.sources):
             raise SourceError("; ".join(f"{SOURCE_LABELS.get(k, k)}: {v}" for k, v in errors.items()))
         return listings
+
+    def load_details(self, listing: Listing) -> bool:
+        """Detailseite nachladen, falls die Quelle das kann und nicht pausiert ist."""
+        source = self.sources.get(listing.source)
+        loader = getattr(source, "load_details", None)
+        if loader is None or self.paused(listing.source):
+            return False
+        try:
+            loader(listing)
+            return True
+        except Exception as exc:
+            self._note_error(listing.source, exc)
+            log.warning("Details für %s nicht ladbar: %s", listing.key, exc)
+            return False
 
 
 def create_source(settings: Settings) -> MultiSource:

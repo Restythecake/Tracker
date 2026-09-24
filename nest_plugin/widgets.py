@@ -68,7 +68,7 @@ def overview(engine: Engine, size: str | None) -> dict[str, Any]:
     if not last:
         return {"kind": "stat", "state": "loading", "label": "Neue Treffer",
                 "message": "Erste Suche läuft …"}
-    count = engine.store.count_new_since(now() - timedelta(hours=24))
+    count = engine.count_new_since(now() - timedelta(hours=24))
     active = len(engine.active_searches)
     sub = f"{active} Suche{'n' if active != 1 else ''} · geprüft {ago(parse_iso(last.get('finished')))}"
     payload: dict[str, Any] = {
@@ -83,17 +83,18 @@ def overview(engine: Engine, size: str | None) -> dict[str, Any]:
 
 
 def _subtitle(listing) -> str:
-    parts = [listing.price_text, listing.source_label]
+    a = listing.assessment or {}
+    parts = [listing.price_text, a.get("label"), a.get("summary"), listing.source_label]
     if listing.location:
         parts.append(listing.location)
-    return " · ".join(parts)
+    return " · ".join(p for p in parts if p)
 
 
 def latest(engine: Engine, size: str | None) -> dict[str, Any]:
     if not engine.searches:
         return _no_searches()
     rows = LIST_ROWS.get(size or "", 4)
-    matches = engine.store.recent_matches(limit=rows)
+    matches = engine.recent_matches(limit=rows)
     if not matches:
         tracked = engine.store.count_tracked()
         msg = (f"Noch nichts Neues. {tracked} passende Angebote sind schon bekannt und werden nicht erneut gemeldet."
@@ -129,7 +130,7 @@ def searches(engine: Engine, size: str | None) -> dict[str, Any]:
         if row is None or row["last_run"] is None:
             checks.append({"label": s.name, "state": "loading", "detail": "wartet auf ersten Lauf"})
             continue
-        new_today = len(engine.store.recent_matches(limit=100, search=s.name, since=day))
+        new_today = len(engine.recent_matches(limit=100, search=s.name, since=day))
         detail = f"{row['last_matched']} passend · {new_today} neu heute · {ago(parse_iso(row['last_run']))}"
         if row["last_error"]:
             checks.append({"label": s.name, "state": "error", "detail": row["last_error"][:120]})
@@ -149,10 +150,11 @@ def searches(engine: Engine, size: str | None) -> dict[str, Any]:
 def deals(engine: Engine, size: str | None) -> dict[str, Any]:
     if not engine.searches:
         return _no_searches()
-    matches = engine.store.recent_matches(limit=TABLE_ROWS.get(size or "", 6), include_silent=True)
+    matches = engine.recent_matches(limit=TABLE_ROWS.get(size or "", 6), include_silent=True)
     columns = [
         {"key": "title", "label": "Angebot"},
         {"key": "price", "label": "Preis", "align": "right"},
+        {"key": "verdict", "label": "Urteil"},
         {"key": "source", "label": "Quelle"},
         {"key": "age", "label": "Gefunden", "align": "right"},
     ]
@@ -165,7 +167,8 @@ def deals(engine: Engine, size: str | None) -> dict[str, Any]:
         "kind": "table", "state": "ok", "title": "Passende Angebote", "columns": columns,
         "rows": [
             {"title": m.listing.title[:70], "price": m.listing.price_text, "source": m.listing.source_label,
-             "search": m.search, "age": ago(m.first_seen)}
+             "search": m.search, "age": ago(m.first_seen),
+             "verdict": (m.listing.assessment or {}).get("label") or "–"}
             for m in matches
         ],
     }

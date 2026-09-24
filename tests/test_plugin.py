@@ -265,3 +265,46 @@ def test_http_contract(rig, tmp_path):
         assert "Angebot nicht gefunden" in get("/go/nope")[1]
     finally:
         httpd.shutdown()
+
+
+# ------------------------------------------------------------ pc evaluation
+class DetailSource(FakeSource):
+    def __init__(self):
+        super().__init__()
+        self.details: dict[str, dict] = {}
+        self.loaded: list[str] = []
+
+    def load_details(self, listing):
+        self.loaded.append(listing.item_id)
+        for k, v in self.details.get(listing.item_id, {}).items():
+            setattr(listing, k, v)
+
+
+def pc(source, n, title, price):
+    return Listing(item_id=str(n), title=title, price=price, currency="EUR",
+                   url=f"https://www.kleinanzeigen.de/s-anzeige/x/{n}", source=source)
+
+
+def test_pc_search_notifies_only_real_deals():
+    ka = DetailSource()
+    client = FakeClient()
+    engine = Engine(Store(":memory:"), client, source_factory=lambda st: MultiSource({"kleinanzeigen": ka}),
+                    pause=lambda s: None)
+    engine.update_settings({"searches": ["gaming pc 400-1000 bewertung:pc @ka"]}, trigger=False)
+    engine.run_once()  # stiller erster Lauf
+    ka.items = [
+        pc("kleinanzeigen", 1, "Gaming PC Ryzen 7 5700X, RTX 4070, 32GB RAM", 850),     # Deal
+        pc("kleinanzeigen", 2, "Gaming PC GTX 1650 i5 16GB", 500),                       # zu schwach
+        pc("kleinanzeigen", 3, "Gaming PC RTX 4070 Ryzen 5 5600 16GB", 999),             # passt, zu teuer
+        pc("kleinanzeigen", 4, "Gaming PC RTX 4070 i7-12700F 32GB", 870),                # laut Details neu
+    ]
+    ka.details = {"4": {"is_new": True, "description": "Zustand Neu, 0% Finanzierung"}}
+    engine.run_once()
+    assert [c["url"].rsplit("/", 1)[1] for c in client.sent] == ["1"]
+    assert client.sent[0]["title"].startswith("Guter Preis: 850 € · RTX 4070")
+    assert "✓ 32 GB RAM" in client.sent[0]["body"]
+    shown = {m.listing.item_id: m.listing.assessment["verdict"]
+             for m in engine.store.recent_matches(include_silent=True)}
+    assert shown == {"1": "gut", "3": "teuer"}  # 2 nie aufgenommen, 4 versteckt
+    engine.run_once()
+    assert sorted(ka.loaded) == ["1", "3", "4"]  # Details je Anzeige nur einmal

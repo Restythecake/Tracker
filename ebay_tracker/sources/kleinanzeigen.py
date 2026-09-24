@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from urllib.parse import quote
 
 import requests
@@ -35,6 +36,8 @@ HEADERS = {
 }
 
 _PLZ = re.compile(r"^\d{5}$")
+# Kategorie -> (URL-Slug, Code). "pc" = Elektronik > PCs
+CATEGORIES = {"pc": ("pcs", "c228")}
 _RADII = (5, 10, 20, 30, 50, 100, 150, 200)
 _WS = re.compile(r"\s+")
 # "469 €", "1.250 € VB", "VB", "Zu verschenken", auch "450 € 395 €" (reduziert)
@@ -56,8 +59,7 @@ def snap_radius(km: int) -> int:
 
 
 def build_url(search: Search, location_id: str | None = None, plz: str | None = None,
-              radius_km: int | None = None) -> str:
-    segments: list[str] = []
+              radius_km: int | None = None, query: str | None = None) -> str:
     # "anzeige:angebote" blendet Gesuche aus ("Suche ThinkPad T14") -- die sind
     # für einen Tracker, der Angebote melden soll, immer Rauschen.
     filters = ["anzeige:angebote", "sortierung:neuste"]
@@ -65,17 +67,22 @@ def build_url(search: Search, location_id: str | None = None, plz: str | None = 
         lo = f"{search.min_price:.0f}" if search.min_price is not None else ""
         hi = f"{search.max_price:.0f}" if search.max_price is not None else ""
         filters.append(f"preis:{lo}:{hi}")
+    cat_slug, cat_code = CATEGORIES.get(search.category or "", (None, ""))
+    code = f"k0{cat_code}"
+    head: list[str] = []
     if location_id and plz:
-        segments.append(f"s-{plz}")
-        segments.extend(filters)
-        code = f"k0l{location_id}"
+        head.append(plz)
+        code += f"l{location_id}"
         if radius_km:
             code += f"r{snap_radius(radius_km)}"
+    if cat_slug:
+        # /s-pcs/<plz>/<filter>/…  bzw. ohne Kategorie /s-<plz>/<filter>/…
+        segments = [f"s-{cat_slug}", *head, *filters]
+    elif head:
+        segments = [f"s-{head[0]}", *filters]
     else:
-        segments.append("s-" + filters[0])
-        segments.extend(filters[1:])
-        code = "k0"
-    segments.append(slugify_query(search.query))
+        segments = ["s-" + filters[0], *filters[1:]]
+    segments.append(slugify_query(query or search.query))
     segments.append(code)
     return f"{BASE}/" + "/".join(segments)
 
@@ -124,6 +131,14 @@ def parse_results(html: str) -> list[Listing]:
         price, note = _price(article)
         img = article.select_one("[data-image-container] img") or article.find("img")
         image = img.get("src") if img else None
+        snippet = None
+        if title_el is not None:
+            h = title_el.find_parent(["h3", "h2"])
+            p = h.find_next_sibling("p") if h else None
+            snippet = _text(p) or None
+        dealer = article.select_one('a[href^="/pro/"]') is not None
+        shipping = next((_text(sp) for sp in article.select("[data-dhl-promotion], span")
+                         if _text(sp) in ("Versand möglich", "Nur Abholung")), None)
         listings[ad_id] = Listing(
             item_id=ad_id,
             title=title,
@@ -135,6 +150,9 @@ def parse_results(html: str) -> list[Listing]:
             location=_location(article),
             buying_options=["FIXED_PRICE"],
             source="kleinanzeigen",
+            description=snippet,
+            dealer=dealer,
+            shipping_note=shipping,
         )
     return list(listings.values())
 
@@ -168,24 +186,33 @@ class KleinanzeigenSource:
         self._locations[plz] = loc
         return loc
 
-    def build_url(self, search: Search) -> str:
+    def build_url(self, search: Search, query: str | None = None) -> str:
         plz = search.plz or self.settings.kleinanzeigen_plz
         radius = search.radius_km or self.settings.kleinanzeigen_radius_km
         if plz and _PLZ.match(plz):
             loc = self.location_id(plz)
             if loc:
-                return build_url(search, loc, plz, radius)
+                return build_url(search, loc, plz, radius, query=query)
             log.warning("PLZ %s unbekannt – suche deutschlandweit", plz)
-        return build_url(search)
+        return build_url(search, query=query)
 
     def search(self, search: Search) -> list[Listing]:
-        url = self.build_url(search)
+        results: dict[str, Listing] = {}
+        for i, query in enumerate(search.all_queries):
+            if i:
+                time.sleep(1.5)
+            for listing in self._search_one(search, query):
+                results.setdefault(listing.item_id, listing)
+        return list(results.values())
+
+    def _search_one(self, search: Search, query: str) -> list[Listing]:
+        url = self.build_url(search, query)
         try:
             resp = self.session.get(url, timeout=30)
         except REQUEST_ERRORS as exc:
             raise SourceError(f"Kleinanzeigen nicht erreichbar: {exc.__class__.__name__}") from exc
         if resp.status_code in (403, 429):
-            raise SourceError(f"Kleinanzeigen blockt die Anfrage ({resp.status_code}) – Intervall erhöhen")
+            raise SourceError(f"Kleinanzeigen blockt die Anfrage ({resp.status_code}) – Intervall erhöhen", blocked=True)
         if resp.status_code != 200:
             raise SourceError(f"Kleinanzeigen-Suche fehlgeschlagen ({resp.status_code})")
         # Die Seite ist UTF-8, sagt es aber nicht im Content-Type; requests rät
@@ -195,3 +222,31 @@ class KleinanzeigenSource:
         if not listings and "data-adid" not in html and "Keine Ergebnisse" not in html:
             log.warning("Kleinanzeigen: keine Anzeigen erkannt – evtl. hat sich das Seitenlayout geändert")
         return listings[: self.settings.max_results]
+
+    def load_details(self, listing: Listing) -> None:
+        """Beschreibung und Zustand von der Detailseite nachladen (in-place)."""
+        try:
+            resp = self.session.get(listing.url, timeout=20)
+        except REQUEST_ERRORS as exc:
+            raise SourceError(f"Detailseite nicht ladbar: {exc.__class__.__name__}") from exc
+        if resp.status_code != 200:
+            raise SourceError(f"Detailseite {resp.status_code}", blocked=resp.status_code in (403, 429))
+        parse_details(resp.content.decode("utf-8", errors="replace"), listing)
+
+
+def parse_details(html: str, listing: Listing) -> None:
+    soup = BeautifulSoup(html, "html.parser")
+    desc = soup.select_one("#viewad-description-text")
+    if desc is not None:
+        listing.description = desc.get_text("\n", strip=True)[:6000]
+    details = _text(soup.select_one("#viewad-details"))
+    m = re.search(r"Zustand\s+(Neu|Sehr Gut|Gut|In Ordnung|Defekt)", details, re.IGNORECASE)
+    if m:
+        listing.condition = m.group(1)
+        listing.is_new = m.group(1).lower() == "neu"
+    ship = _text(soup.select_one(".boxedarticle--details--shipping"))
+    if ship:
+        listing.shipping_note = ship
+    if soup.select_one('#viewad-contact a[href^="/pro/"], .badge-hint-pro-small-srp, [data-testid="pro-badge"]'):
+        listing.dealer = True
+    listing.details_loaded = True

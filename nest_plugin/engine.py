@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from ebay_tracker.config import MARKETPLACES, Search, Settings
 from ebay_tracker.filters import rejection_reason
+from ebay_tracker.hardware import Assessment, assess, market_note, requirements_from
 from ebay_tracker.models import SOURCE_LABELS, Listing
 from ebay_tracker.sources import MultiSource, create_source
 
@@ -30,8 +31,8 @@ from .store import Store, iso, now
 log = logging.getLogger(__name__)
 
 DEFAULT_SEARCHES = [
-    'name:"ThinkPad T14 32GB" thinkpad t14 32gb max:600 +t14 +32gb -defekt -bastler -displaybruch',
-    'name:"Gaming-PC RTX 4070" gaming pc rtx 4070 500-1100 +"rtx 4070" -defekt -bastler -suche -tausche',
+    'name:"Gaming-PC bis 1000 €" gaming pc | pc rtx 400-1000 bewertung:pc zustand:gebraucht kauf:sofort '
+    '-defekt -bastler',
 ]
 LEVELS = ("min", "low", "default", "high", "urgent")
 
@@ -97,6 +98,22 @@ class PluginSettings:
             kleinanzeigen_plz=plz or None,
             kleinanzeigen_radius_km=self.kleinanzeigen_radius or None,
         )
+
+
+def format_notification(search_name: str, listing: Listing) -> tuple[str, str]:
+    """Titel und Text einer Treffer-Meldung. Mit Bewertung: Specs, Urteil, Pro/Contra."""
+    meta = " · ".join(x for x in (listing.source_label, listing.location, listing.shipping_note) if x)
+    a = listing.assessment
+    if not a:
+        return f"{listing.price_text} – {search_name}", "\n".join(x for x in (listing.title, meta, listing.url) if x)
+    head = " · ".join(x for x in (listing.price_text, a.get("summary")) if x)
+    warn = "⚠️ " if a.get("verdict") == "verdaechtig" else ""
+    title = f"{warn}{a.get('label')}: {head}"
+    lines = [listing.title]
+    lines += [f"✓ {p}" for p in a.get("pros", [])[:5]]
+    lines += [f"✗ {c}" for c in a.get("cons", [])[:4]]
+    lines += [meta, listing.url]
+    return title[:256], "\n".join(x for x in lines if x)[:4096]
 
 
 def signature(search: Search) -> str:
@@ -197,6 +214,15 @@ class Engine:
     def searches(self) -> list[Search]:
         return [p.search for p in self.parsed if p.search is not None]
 
+    def recent_matches(self, **kw):
+        """Nur Treffer von Suchen, die es noch gibt -- gelöschte verschwinden aus der Anzeige."""
+        if not kw.get("search"):
+            kw["searches"] = [s.name for s in self.searches]
+        return self.store.recent_matches(**kw)
+
+    def count_new_since(self, since):
+        return self.store.count_new_since(since, [s.name for s in self.searches])
+
     @property
     def active_searches(self) -> list[Search]:
         return [s for s in self.searches if s.enabled]
@@ -226,6 +252,18 @@ class Engine:
                 self.store.prune()
             return summary
 
+    DETAIL_BUDGET = 6  # Detailseiten je bewerteter Suche und Lauf
+
+    def _assess(self, search: Search, listing: Listing, *, with_market: bool = False) -> Assessment:
+        req = requirements_from(search.min_gpu, search.min_ram)
+        a = assess(listing.title, listing.price, description=listing.description or "", req=req,
+                   new=listing.is_new, dealer=listing.dealer)
+        if with_market and a.specs.gpu:
+            a.market = market_note(listing.price, self.store.market_prices(a.specs.gpu))
+            if a.market:
+                (a.pros if " unter " in a.market else a.cons).append(a.market)
+        return a
+
     def _check(self, search: Search, source: MultiSource, settings: PluginSettings, summary: RunSummary) -> None:
         sig = signature(search)
         initialized = self.store.initialized_sources(search.name, sig)
@@ -236,17 +274,39 @@ class Engine:
             error = "; ".join(f"{SOURCE_LABELS.get(k, k)}: {v}" for k, v in errors.items())
             summary.errors[search.name] = error
 
-        matched: list[Listing] = []
+        matched: list[tuple[Listing, Assessment | None]] = []
         for listing in reversed(listings):  # älteste zuerst, dann stimmt die Reihenfolge der Meldungen
-            if rejection_reason(listing, search) is None:
-                matched.append(listing)
+            if rejection_reason(listing, search) is not None:
+                continue
+            a = None
+            if search.evaluate:
+                a = self._assess(search, listing)
+                if a.specs.gpu and listing.price:
+                    self.store.observe(listing.key, a.specs.gpu, listing.price)
+                if not a.ok:
+                    continue
+            matched.append((listing, a))
+
         new = silent_new = 0
-        for listing in matched:
+        budget = self.DETAIL_BUDGET
+        for listing, a in matched:
             if self.store.is_matched(search.name, listing.key):
                 self.store.upsert_listing(listing)  # Preis kann sich geändert haben
                 continue
             # Still, solange diese Quelle für diese Suche noch nie eingelesen wurde
-            silent = not settings.notify_first_run and listing.source not in initialized
+            silent: int = int(not settings.notify_first_run and listing.source not in initialized)
+            if a is not None and not silent:
+                if budget > 0:
+                    budget -= 1
+                    self.pause(random.uniform(0.8, 1.8))
+                    source.load_details(listing)
+                a = self._assess(search, listing, with_market=True)
+                if not a.ok:
+                    silent = 2  # z. B. "Zustand Neu" oder RAM zu klein laut Beschreibung
+                elif not a.notify_worthy:
+                    silent = 1  # passt, aber kein Deal: in der Galerie, ohne Meldung
+            if a is not None:
+                listing.assessment = a.to_dict()
             self.store.add_match(search.name, listing, silent=silent)
             if silent:
                 silent_new += 1
@@ -254,11 +314,11 @@ class Engine:
                 new += 1
                 summary.new.append((search.name, listing))
         self.store.commit()
-        prices = [l.price for l in matched if l.price is not None and l.price > 0]
+        prices = [l.price for l, _ in matched if l.price is not None and l.price > 0]
         self.store.record_run(search.name, sig, fetched=len(listings), matched=len(matched), new=new,
                               prices=prices, error=error, source_errors=errors, answered=answered)
         log.info("[%s] %d geholt, %d passend, %d neu%s%s", search.name, len(listings), len(matched), new,
-                 f", {silent_new} still eingelesen" if silent_new else "",
+                 f", {silent_new} still/aussortiert" if silent_new else "",
                  f" – Fehler: {errors}" if errors else "")
 
     def _notify(self, summary: RunSummary, settings: PluginSettings) -> None:
@@ -271,15 +331,8 @@ class Engine:
         items = summary.new
         single = items if len(items) <= limit else items[: limit - 1]
         for search_name, listing in single:
-            body = listing.title
-            meta = " · ".join(x for x in (listing.source_label, listing.location) if x)
-            if meta:
-                body += f"\n{meta}"
-            body += f"\n{listing.url}"
-            result = self.client.notify(
-                title=f"{listing.price_text} – {search_name}",
-                body=body, level=settings.notify_level, url=listing.url,
-            )
+            title, body = format_notification(search_name, listing)
+            result = self.client.notify(title=title, body=body, level=settings.notify_level, url=listing.url)
             if result.ok:
                 summary.notified += 1
                 self.store.mark_notified(search_name, listing.key)

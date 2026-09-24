@@ -47,6 +47,18 @@ class Search:
     # Nur Kleinanzeigen: Umkreissuche. None = ganz Deutschland bzw. globaler Default.
     plz: str | None = None
     radius_km: int | None = None
+    # Weitere Suchbegriffe, deren Treffer mit denen von ``query`` zusammengeführt werden
+    alt_queries: list[str] = field(default_factory=list)
+    # "pc": Kategorie PCs (eBay 179, Kleinanzeigen c228)
+    category: str | None = None
+    # "pc": verbaute Hardware lesen und den Preis bewerten (ebay_tracker.hardware)
+    evaluate: str | None = None
+    min_gpu: str | None = None
+    min_ram: int | None = None
+
+    @property
+    def all_queries(self) -> list[str]:
+        return [self.query, *[q for q in self.alt_queries if q != self.query]]
 
 
 @dataclass

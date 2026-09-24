@@ -21,6 +21,11 @@ jede Suche eine Zeile in einer kleinen Syntax, die man ohne Anleitung lesen kann
 | ``zustand:neu|gebraucht`` | eBay-Zustand                                     |
 | ``kauf:sofort|auktion``   | eBay-Angebotsformat                              |
 | ``name:"…"``              | Anzeigename (sonst der Suchbegriff)              |
+| ``a b | c d``             | mehrere Suchbegriffe, Treffer zusammengeführt    |
+| ``kat:pc``                | nur Kategorie PCs                                |
+| ``bewertung:pc``          | Hardware lesen, Preis bewerten, nur Deals melden |
+| ``gpu:3080``              | mit Bewertung: mindestens diese Grafikkarten-Klasse |
+| ``ram:32``                | mit Bewertung: mindestens so viel RAM            |
 | ``//`` am Anfang          | Suche pausiert                                   |
 
 ``+re:…`` / ``-re:…`` funktionieren wie in config.yaml (regulärer Ausdruck).
@@ -76,7 +81,6 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
         result.error = "leere Zeile"
         return result
 
-    words: list[str] = []
     include_all: list[str] = []
     include_any: list[str] = []
     exclude: list[str] = []
@@ -86,9 +90,17 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
     condition, buying = "any", "all"
     plz = None
     radius = None
+    category = None
+    evaluate = None
+    min_gpu = None
+    min_ram = None
+    groups: list[list[str]] = [[]]
 
     for tok in _tokens(raw):
         low = tok.lower()
+        if tok == "|":
+            groups.append([])
+            continue
         if len(tok) > 1 and tok[0] in "+-~" and not _RANGE.match(tok) and not tok[1:].replace(".", "").isdigit():
             term = tok[1:]
             {"+": include_all, "-": exclude, "~": include_any}[tok[0]].append(term)
@@ -129,20 +141,40 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
                     condition = {"neu": "new", "new": "new", "gebraucht": "used", "used": "used"}[value.lower()]
                 elif key == "kauf":
                     buying = {"sofort": "fixed", "fixed": "fixed", "auktion": "auction", "auction": "auction"}[value.lower()]
+                elif key in ("kat", "kategorie"):
+                    if value.lower() not in ("pc", "pcs", "computer"):
+                        raise ValueError
+                    category = "pc"
+                elif key in ("bewertung", "check", "profil"):
+                    if value.lower() not in ("pc", "gaming-pc", "gamingpc"):
+                        raise ValueError
+                    evaluate = "pc"
+                elif key in ("gpu", "mingpu", "grafik"):
+                    from ebay_tracker.hardware import find_gpu
+                    if not find_gpu(value.lower()):
+                        raise ValueError
+                    min_gpu = value
+                elif key in ("ram", "minram"):
+                    min_ram = int(_num(value.lower().replace("gb", "")))
                 elif key == "re":
-                    words.append(tok)  # ein nacktes re:… ist wohl als Suchwort gemeint
+                    groups[-1].append(tok)  # ein nacktes re:… ist wohl als Suchwort gemeint
                 else:
-                    words.append(tok)
+                    groups[-1].append(tok)
                     result.warnings.append(f"'{key}:' kenne ich nicht, als Suchwort genommen")
             except (ValueError, KeyError):
                 result.warnings.append(f"'{tok}' ist ungültig und wurde ignoriert")
             continue
-        words.append(tok)
+        groups[-1].append(tok)
 
-    query = " ".join(words).strip()
+    queries = [" ".join(g).strip() for g in groups if " ".join(g).strip()]
+    query = queries[0] if queries else ""
     if not query:
         result.error = "kein Suchbegriff (nur Filter angegeben)"
         return result
+    if evaluate and category is None:
+        category = "pc"  # eine PC-Bewertung ohne PC-Kategorie wäre voller Einzelteile
+    if (min_gpu or min_ram) and not evaluate:
+        result.warnings.append("gpu:/ram: wirken nur zusammen mit bewertung:pc")
     if min_price is not None and max_price is not None and min_price > max_price:
         min_price, max_price = max_price, min_price
         result.warnings.append("min/max vertauscht")
@@ -161,6 +193,11 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
         sources=sources or list(default_sources or KNOWN_SOURCES),
         plz=plz,
         radius_km=radius,
+        alt_queries=queries[1:],
+        category=category,
+        evaluate=evaluate,
+        min_gpu=min_gpu,
+        min_ram=min_ram,
     )
     return result
 

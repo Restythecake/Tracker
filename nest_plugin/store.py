@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS runs (
     error         TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_search_at ON runs(search, at);
+CREATE TABLE IF NOT EXISTS observed (
+    key    TEXT PRIMARY KEY,
+    gpu    TEXT NOT NULL,
+    price  REAL NOT NULL,
+    at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observed_gpu ON observed(gpu, at);
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -109,6 +116,22 @@ class Store:
         with self._lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            self._migrate()
+
+    # Spalten, die nach 0.1.0 dazukamen. CREATE TABLE IF NOT EXISTS legt sie
+    # auf einem bestehenden Volume nicht an.
+    _LISTING_COLUMNS = {"description": "TEXT", "dealer": "INTEGER DEFAULT 0", "shipping_note": "TEXT",
+                        "condition": "TEXT", "assessment": "TEXT"}
+
+    def _migrate(self) -> None:
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(listings)")}
+        for col, kind in self._LISTING_COLUMNS.items():
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE listings ADD COLUMN {col} {kind}")
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(searches)")}
+        if "init_sources" not in have:
+            self.conn.execute("ALTER TABLE searches ADD COLUMN init_sources TEXT")
+        self.conn.commit()
 
     # ------------------------------------------------------------------ meta
     def get_meta(self, key: str, default: Any = None) -> Any:
@@ -191,20 +214,47 @@ class Store:
     # -------------------------------------------------------------- listings
     def upsert_listing(self, listing: Listing) -> None:
         at = iso(now())
+        assessment = json.dumps(listing.assessment, ensure_ascii=False) if listing.assessment else None
         with self._lock:
             self.conn.execute(
                 """INSERT INTO listings (key, source, item_id, title, price, price_note, currency, url,
-                       image_url, location, first_seen, last_seen)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       image_url, location, first_seen, last_seen, description, dealer, shipping_note,
+                       condition, assessment)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(key) DO UPDATE SET
                        title = excluded.title, price = excluded.price, price_note = excluded.price_note,
                        image_url = COALESCE(excluded.image_url, listings.image_url),
                        location = COALESCE(excluded.location, listings.location),
+                       description = COALESCE(excluded.description, listings.description),
+                       dealer = MAX(excluded.dealer, listings.dealer),
+                       shipping_note = COALESCE(excluded.shipping_note, listings.shipping_note),
+                       condition = COALESCE(excluded.condition, listings.condition),
+                       assessment = COALESCE(excluded.assessment, listings.assessment),
                        last_seen = excluded.last_seen""",
                 (listing.key, listing.source, listing.item_id, listing.title, listing.price,
                  listing.price_note, listing.currency, listing.url, listing.image_url,
-                 listing.location, at, at),
+                 listing.location, at, at, listing.description, int(listing.dealer), listing.shipping_note,
+                 listing.condition, assessment),
             )
+
+    def known_listing(self, key: str) -> bool:
+        with self._lock:
+            return self.conn.execute("SELECT 1 FROM listings WHERE key = ?", (key,)).fetchone() is not None
+
+    def observe(self, key: str, gpu: str, price: float) -> None:
+        """Merkt sich einen Angebotspreis je GPU für den Marktvergleich (auch für nicht passende)."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO observed (key, gpu, price, at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET price = excluded.price, gpu = excluded.gpu",
+                (key, gpu, price, iso(now())),
+            )
+
+    def market_prices(self, gpu: str, days: int = 21) -> list[float]:
+        with self._lock:
+            rows = self.conn.execute("SELECT price FROM observed WHERE gpu = ? AND at >= ?",
+                                     (gpu, iso(now() - timedelta(days=days)))).fetchall()
+        return [r["price"] for r in rows]
 
     def is_matched(self, search: str, key: str) -> bool:
         with self._lock:
@@ -212,7 +262,9 @@ class Store:
                 "SELECT 1 FROM matches WHERE search = ? AND key = ?", (search, key)
             ).fetchone() is not None
 
-    def add_match(self, search: str, listing: Listing, *, silent: bool) -> None:
+    # matches.silent: 0 = gemeldet/meldbar, 1 = still (erster Lauf oder kein Deal,
+    # aber sichtbar in der Galerie), 2 = versteckt (nach Detailprüfung ungeeignet)
+    def add_match(self, search: str, listing: Listing, *, silent: bool | int) -> None:
         with self._lock:
             self.upsert_listing(listing)
             self.conn.execute(
@@ -234,15 +286,18 @@ class Store:
         return _listing(row) if row else None
 
     def recent_matches(self, *, limit: int = 50, search: str | None = None,
-                       include_silent: bool = False, since: datetime | None = None) -> list[Match]:
+                       include_silent: bool = False, since: datetime | None = None,
+                       searches: list[str] | None = None) -> list[Match]:
         sql = ("SELECT m.search, m.key, m.first_seen, m.notified, m.silent, l.* FROM matches m "
                "JOIN listings l ON l.key = m.key WHERE 1=1")
         args: list[Any] = []
-        if not include_silent:
-            sql += " AND m.silent = 0"
+        sql += " AND m.silent = 0" if not include_silent else " AND m.silent < 2"
         if search:
             sql += " AND m.search = ?"
             args.append(search)
+        elif searches is not None:
+            sql += f" AND m.search IN ({','.join('?' * len(searches)) or 'NULL'})"
+            args.extend(searches)
         if since:
             sql += " AND m.first_seen >= ?"
             args.append(iso(since))
@@ -256,17 +311,20 @@ class Store:
             for r in rows
         ]
 
-    def count_new_since(self, since: datetime) -> int:
+    def count_new_since(self, since: datetime, searches: list[str] | None = None) -> int:
+        sql = "SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND first_seen >= ?"
+        args: list[Any] = [iso(since)]
+        if searches is not None:
+            sql += f" AND search IN ({','.join('?' * len(searches)) or 'NULL'})"
+            args.extend(searches)
         with self._lock:
-            return self.conn.execute(
-                "SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND first_seen >= ?", (iso(since),)
-            ).fetchone()[0]
+            return self.conn.execute(sql, args).fetchone()[0]
 
     def count_tracked(self, search: str | None = None) -> int:
         with self._lock:
             if search:
-                return self.conn.execute("SELECT COUNT(*) FROM matches WHERE search = ?", (search,)).fetchone()[0]
-            return self.conn.execute("SELECT COUNT(DISTINCT key) FROM matches").fetchone()[0]
+                return self.conn.execute("SELECT COUNT(*) FROM matches WHERE search = ? AND silent < 2", (search,)).fetchone()[0]
+            return self.conn.execute("SELECT COUNT(DISTINCT key) FROM matches WHERE silent < 2").fetchone()[0]
 
     def price_series(self, search: str, since: datetime) -> list[tuple[datetime, float]]:
         with self._lock:
@@ -279,7 +337,7 @@ class Store:
     def reset(self) -> None:
         """Vergisst Treffer und Läufe; der nächste Lauf ist wieder still."""
         with self._lock:
-            self.conn.executescript("DELETE FROM matches; DELETE FROM runs; DELETE FROM searches; DELETE FROM listings;")
+            self.conn.executescript("DELETE FROM matches; DELETE FROM runs; DELETE FROM searches; DELETE FROM listings; DELETE FROM observed;")
             self.conn.commit()
 
     def prune(self, keep_days: int = 60) -> None:
@@ -288,12 +346,21 @@ class Store:
             self.conn.execute("DELETE FROM runs WHERE at < ?", (cutoff,))
             self.conn.execute("DELETE FROM matches WHERE first_seen < ?", (cutoff,))
             self.conn.execute("DELETE FROM listings WHERE key NOT IN (SELECT key FROM matches)")
+            self.conn.execute("DELETE FROM observed WHERE at < ?", (cutoff,))
             self.conn.commit()
 
 
 def _listing(row: sqlite3.Row) -> Listing:
+    keys = row.keys()
+
+    def col(name: str) -> Any:
+        return row[name] if name in keys else None
+
+    raw = col("assessment")
     return Listing(
         item_id=row["item_id"], title=row["title"], price=row["price"], price_note=row["price_note"],
         currency=row["currency"] or "EUR", url=row["url"], image_url=row["image_url"],
-        location=row["location"], source=row["source"],
+        location=row["location"], source=row["source"], description=col("description"),
+        dealer=bool(col("dealer")), shipping_note=col("shipping_note"), condition=col("condition"),
+        assessment=json.loads(raw) if raw else None,
     )

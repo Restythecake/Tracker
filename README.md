@@ -43,7 +43,18 @@ Container schreiben (`apply-token`). Danach:
   | `plz:10115 umkreis:30` | Kleinanzeigen-Umkreis für diese Suche |
   | `zustand:neu\|gebraucht`, `kauf:sofort\|auktion` | eBay-Filter |
   | `name:"…"` | Anzeigename |
+  | `a b \| c d` | mehrere Suchbegriffe, Treffer zusammengeführt |
+  | `kat:pc` | nur Kategorie PCs (eBay 179, Kleinanzeigen c228) |
+  | `bewertung:pc` | GPU/CPU/RAM/SSD/Netzteil lesen, Preis gegen Teilewert bewerten, nur Deals melden |
+  | `gpu:4070`, `ram:32` | Mindestausstattung für `bewertung:pc` (Default: RX 6800/RTX 3080-Klasse, 16 GB) |
   | `//` am Anfang | Suche pausieren |
+
+  **PC-Bewertung** (`ebay_tracker/hardware.py`): Aus Titel, Kurztext und – für neue Kandidaten – der
+  Detailseite werden die Teile gelesen. Fairer Preis = grobe Gebrauchtpreise der Teile (Tabellen oben
+  in der Datei, Stand Herbst 2026). Urteil: *Top-Deal* (≤ 85 %), *Guter Preis* (≤ 100 %), *Fair*,
+  *Zu teuer*, *Zu gut um wahr zu sein?* (< 62 % → Betrugsverdacht). Gemeldet werden Top/Gut/Verdacht;
+  aussortiert werden zu schwache GPUs/CPUs, zu wenig RAM, Laptops, Gesuche, Tausch, defekt, ohne GPU und
+  „Zustand Neu" (Händler-PCs). Zusätzlich Vergleich mit den selbst beobachteten Preisen je GPU.
 
 - **Widgets** auf dem Desktop: *Neue Treffer* (stat), *Neueste Treffer* (list), *Suchen* (status),
   *Angebote* (table), *Preisverlauf* (chart) und *Galerie* (iframe mit Bildern; „Alles ansehen ↗“

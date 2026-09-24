@@ -25,6 +25,13 @@ class Listing:
     source: str = "ebay"
     # Freitext neben dem Preis, z. B. "VB" oder "Zu verschenken"
     price_note: str | None = None
+    # Kurzbeschreibung aus der Trefferliste bzw. volle Beschreibung von der Detailseite
+    description: str | None = None
+    dealer: bool = False
+    shipping_note: str | None = None  # "Versand möglich" / "Nur Abholung"
+    is_new: bool | None = None  # Zustand laut Detailseite
+    details_loaded: bool = False
+    assessment: dict | None = None  # hardware.Assessment.to_dict()
 
     @property
     def key(self) -> str:

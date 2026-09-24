@@ -7,7 +7,11 @@ from ..models import Listing
 
 
 class SourceError(RuntimeError):
-    pass
+    def __init__(self, message: str = "", *, blocked: bool = False):
+        super().__init__(message)
+        # True = der Marktplatz sperrt uns gerade (403/429/Captcha). Dann lohnt
+        # es sich nicht, beim nächsten Lauf sofort wieder anzuklopfen.
+        self.blocked = blocked
 
 
 class Source(Protocol):

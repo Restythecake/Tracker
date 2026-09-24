@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup, Tag
 from ..config import Search, Settings
 from ..models import Listing
 from .base import SourceError
-from .http import REQUEST_ERRORS, new_session
+from .http import HAS_CFFI, REQUEST_ERRORS, new_session
 
 log = logging.getLogger(__name__)
 
@@ -138,18 +138,24 @@ def _domain_from_href(href: str) -> str:
     return m.group(1) if m else "www.ebay.de"
 
 
+CATEGORIES = {"pc": "179"}  # Computer, Tablets & Netzwerk > Desktops & All-in-Ones
+
+
 class EbayScraperSource:
     def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
         if session is not None:  # Tests reichen eine Fake-Session rein
             self.session = session
             self.session.headers.update(HEADERS)
+            self._warmed_up = True
         else:
             self.session = new_session()
-        self._warmed_up = session is not None
+            # Mit curl_cffi passt der Fingerprint bereits; der Startseitenbesuch
+            # kostet nur eine weitere Anfrage, die selbst 403 bekommen kann.
+            self._warmed_up = HAS_CFFI
 
     def _warm_up(self) -> None:
-        """Startseite einmal besuchen, damit eBay die Session-Cookies setzt."""
+        """Startseite einmal besuchen, damit eBay die Session-Cookies setzt (nur requests-Fallback)."""
         if self._warmed_up:
             return
         try:
@@ -158,12 +164,11 @@ class EbayScraperSource:
             log.debug("eBay-Warmup fehlgeschlagen: %s", exc)
         self._warmed_up = True
 
-    def build_params(self, search: Search) -> dict[str, str]:
+    def build_params(self, search: Search, query: str | None = None) -> dict[str, str]:
         params = {
-            "_nkw": search.query,
+            "_nkw": query or search.query,
             "_sop": "10",  # Neu eingestellt zuerst
             "_ipg": "60" if self.settings.max_results <= 60 else "120",
-            "rt": "nc",
         }
         if search.min_price is not None:
             params["_udlo"] = f"{search.min_price:g}"
@@ -177,35 +182,77 @@ class EbayScraperSource:
             params["LH_BIN"] = "1"
         elif search.buying == "auction":
             params["LH_Auction"] = "1"
-        if search.category_id:
-            params["_sacat"] = search.category_id
+        category = search.category_id or CATEGORIES.get(search.category or "")
+        if category:
+            params["_sacat"] = category
         return params
 
     def search(self, search: Search) -> list[Listing]:
-        url = f"https://{self.settings.domain}/sch/i.html"
-        resp = None
-        for attempt in range(2):
-            self._warm_up()
-            try:
-                resp = self.session.get(url, params=self.build_params(search), timeout=30)
-            except REQUEST_ERRORS as exc:
-                raise SourceError(f"eBay nicht erreichbar: {exc.__class__.__name__}") from exc
-            if resp.status_code != 403:
-                break
-            # eBays Bot-Schutz hängt an den Cookies der Session: einmal mit
-            # frischer Session neu aufwärmen, dann aufgeben.
-            self._warmed_up = False
-            self.session.cookies.clear()
-            if attempt == 0:
-                time.sleep(2)
-        if resp.status_code == 403:
-            raise SourceError("eBay blockt die Anfrage (403) – später erneut oder API-Keys nutzen")
+        results: dict[str, Listing] = {}
+        for i, query in enumerate(search.all_queries):
+            if i:
+                time.sleep(2.5)
+            for listing in self._search_one(search, query):
+                results.setdefault(listing.item_id, listing)
+        return list(results.values())
+
+    def _get(self, url: str, **kwargs):
+        self._warm_up()
+        try:
+            resp = self.session.get(url, timeout=30, **kwargs)
+        except REQUEST_ERRORS as exc:
+            raise SourceError(f"eBay nicht erreichbar: {exc.__class__.__name__}") from exc
+        if resp.status_code in (403, 429):
+            # Neue Session für den nächsten Versuch; jetzt nicht nachhaken.
+            self.session = new_session() if not isinstance(self.session, requests.Session) or HAS_CFFI \
+                else self.session
+            self._warmed_up = HAS_CFFI
+            raise SourceError(f"eBay blockt die Anfrage ({resp.status_code})", blocked=True)
+        if "captcha" in str(resp.url).lower() or "splashui/challenge" in str(resp.url):
+            raise SourceError("eBay zeigt ein Captcha", blocked=True)
         if resp.status_code != 200:
             raise SourceError(f"eBay-Suche fehlgeschlagen ({resp.status_code})")
-        if "captcha" in resp.url.lower() or "splashui/challenge" in resp.url:
-            raise SourceError("eBay zeigt ein Captcha – Intervall erhöhen oder API-Keys nutzen")
+        return resp
+
+    def _search_one(self, search: Search, query: str) -> list[Listing]:
+        resp = self._get(f"https://{self.settings.domain}/sch/i.html", params=self.build_params(search, query))
         html = resp.content.decode("utf-8", errors="replace")
         listings = parse_results(html, self.settings.currency)
         if not listings and "srp-results" not in html:
             log.warning("Keine Ergebnisse gefunden – evtl. hat eBay das Seitenlayout geändert")
         return listings[: self.settings.max_results]
+
+    def load_details(self, listing: Listing) -> None:
+        """Artikelmerkmale und Verkäuferbeschreibung (liegt in einem iframe auf itm.ebaydesc.com)."""
+        resp = self._get(listing.url)
+        desc_url = parse_details(resp.content.decode("utf-8", errors="replace"), listing)
+        if desc_url:
+            try:
+                time.sleep(1)
+                d = self.session.get(desc_url, timeout=20)
+                if d.status_code == 200:
+                    text = BeautifulSoup(d.content.decode("utf-8", errors="replace"), "html.parser").get_text("\n", strip=True)
+                    listing.description = ((listing.description or "") + "\n" + text)[:6000]
+            except REQUEST_ERRORS as exc:
+                log.debug("eBay-Beschreibung nicht ladbar: %s", exc)
+
+
+def parse_details(html: str, listing: Listing) -> str | None:
+    """Füllt Zustand/Merkmale; gibt die URL der Beschreibung zurück."""
+    soup = BeautifulSoup(html, "html.parser")
+    pairs = []
+    for dl in soup.select("dl.ux-layout-section-evo__item"):
+        label = _text(dl.find("dt"))
+        value = _text(dl.find("dd"))
+        if label and value and not label.startswith("Artikelzustand") and len(value) < 200:
+            pairs.append(f"{label}: {value}")
+    if pairs:
+        listing.description = "\n".join(pairs)
+    cond = _text(soup.select_one(".x-item-condition-text"))
+    if cond:
+        listing.condition = cond.split(" ")[0]
+        listing.is_new = listing.condition.lower() == "neu"
+    listing.details_loaded = True
+    frame = soup.select_one("iframe#desc_ifr")
+    src = frame.get("src") if frame else None
+    return src if src and src.startswith("https://itm.ebaydesc.com/") else None

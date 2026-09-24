@@ -17,7 +17,8 @@ SEARCH_HELP = (
     "Eine Suche pro Eintrag. Wörter = Suchbegriff · +wort muss im Titel stehen · ~wort eines davon · "
     "-wort darf nicht vorkommen · max:600 / min:150 / 150-600 Preis · @ebay / @kleinanzeigen nur diese "
     "Quelle · plz:10115 umkreis:30 · zustand:gebraucht · kauf:sofort · name:\"Anzeigename\" · "
-    "// am Anfang pausiert die Suche."
+    "a | b mehrere Suchbegriffe · kat:pc nur PCs · bewertung:pc liest GPU/CPU/RAM, bewertet den Preis "
+    "und meldet nur Deals · gpu:3080 / ram:32 Mindestausstattung · // am Anfang pausiert die Suche."
 )
 
 MANIFEST = {
