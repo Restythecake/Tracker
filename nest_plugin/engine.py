@@ -326,7 +326,8 @@ class Engine:
         """Bewertung nur aus Titel/Preis -- entscheidet, ob eine Anzeige überhaupt passt."""
         req = requirements_from(search.min_gpu, search.min_ram)
         if search.evaluate == "ram":
-            return assess_ram(listing.title, listing.price, description=listing.description or "")
+            return assess_ram(listing.title, listing.price, description=listing.description or "",
+                              min_gb=search.min_ram or 16)
         if search.evaluate == "gpu":
             return assess_gpu(listing.title, listing.price, description=listing.description or "", req=req,
                               new=listing.is_new)

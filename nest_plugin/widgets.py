@@ -212,7 +212,12 @@ def offers(engine: Engine, size: str | None) -> dict[str, Any]:
     """Native Kartenleiste (Nest-Widget-Art ``cards``): Bild, Preis, Urteil, Link."""
     if not engine.searches:
         return _no_searches()
-    matches = engine.recent_matches(limit=12, include_silent=True)
+    # Deals zuerst, darin der beste Preis zuerst; "teuer" ganz hinten
+    rank = {"top": 0, "verdaechtig": 1, "gut": 2, "fair": 3, "teuer": 4}
+    pool = engine.recent_matches(limit=60, include_silent=True)
+    pool.sort(key=lambda m: (rank.get((m.listing.assessment or {}).get("verdict"), 3),
+                             (m.listing.assessment or {}).get("ratio") or 9))
+    matches = pool[:12]
     if not matches:
         return {"kind": "cards", "state": "empty", "items": [],
                 "message": "Noch keine passenden Angebote – die Suchen laufen."}
@@ -220,9 +225,12 @@ def offers(engine: Engine, size: str | None) -> dict[str, Any]:
     for m in matches:
         l = m.listing
         a = l.assessment or {}
+        # Karten sind schmal: nur der Betrag als Preis, Zusätze in die Unterzeile
+        price = format_money(l.price, l.currency) if l.price else (l.price_note or "Preis ?")
+        extra = "VB" if l.price_note == "VB" else ("inkl. KS" if l.price_note == "inkl. Käuferschutz" else None)
         item = {"id": m.key + "@" + m.search, "title": a.get("summary") or l.title,
-                "subtitle": " · ".join(x for x in (l.source_label, l.location) if x),
-                "price": l.price_text, "meta": ago(m.first_seen), "url": l.url}
+                "subtitle": " · ".join(x for x in (l.source_label, extra, l.location) if x),
+                "price": price, "meta": ago(m.first_seen), "url": l.url}
         if l.image_url:
             item["image"] = image_path(m.key)
         if a.get("verdict"):

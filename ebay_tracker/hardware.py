@@ -139,6 +139,7 @@ class Assessment:
     risk: int | None = None
     trip_km: int | None = None
     trip_cost: int | None = None
+    summary: str | None = None  # sonst specs.short()
 
     @property
     def label(self) -> str:
@@ -151,7 +152,7 @@ class Assessment:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["label"] = self.label
-        d["summary"] = self.specs.short()
+        d["summary"] = self.summary or self.specs.short()
         return d
 
 
@@ -420,7 +421,7 @@ def requirements_from(min_gpu: str | None, min_ram: int | None) -> Requirements:
 
 
 def assess_ram(title: str, price: float | None, *, description: str = "",
-               market: list[float] | None = None) -> Assessment:
+               market: list[float] | None = None, min_gb: int = 16) -> Assessment:
     """Einzelne RAM-Kits: fairer Wert aus Groesse x Generation.
 
     Arthur will 64-GB-Kits deutlich unter Marktpreis. "Unter dem Markt" ist
@@ -439,13 +440,16 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
     if specs.cpu or re.search(r"\b(?:mini\s*pc|nuc|thinkpad|latitude|elitebook|macbook|imac|mac\s*pro|"
                               r"workstation|tower|desktop\s*pc|all.in.one|windows\s*1[01]|ssd)\b", t):
         return Assessment(False, "ungeeignet", "ganzer Rechner, kein RAM-Kit", None, None, specs)
-    if specs.ram_gb is None or specs.ram_gb < 16:
-        return Assessment(False, "ungeeignet", "RAM-Groesse nicht erkennbar oder unter 16 GB", None, None, specs)
+    if specs.ram_gb is None or specs.ram_gb < min_gb:
+        return Assessment(False, "ungeeignet", f"RAM-Groesse nicht erkennbar oder unter {min_gb} GB",
+                          None, None, specs)
     if specs.gpu is not None:
         # Ein PC, kein RAM-Einzelteil -- der gehoert in die PC-Suche
         return Assessment(False, "ungeeignet", "verbauter PC, kein RAM-Einzelteil", None, None, specs)
     per_gb = ram_price_per_gb(kind)
     fair = int(round(specs.ram_gb * per_gb, -1))
+    specs.cpu = None
+    summary = f"{specs.ram_gb} GB {kind.upper()}"
     pros = [f"{specs.ram_gb} GB {kind.upper()}"]
     cons: list[str] = []
     if kind == "ddr5":
@@ -479,6 +483,7 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
     (pros if diff <= 0 else cons).append(f"{abs(diff)} % {'unter' if diff <= 0 else 'ueber'} Marktwert (~{fair} EUR)")
     a = Assessment(True, verdict, None, fair, round(ratio, 3), specs, pros, cons)
     a.market = market_note(price, market)
+    a.summary = summary
     return a
 
 

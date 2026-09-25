@@ -189,8 +189,10 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
         return result
     if evaluate == "pc" and category is None:
         category = "pc"  # eine PC-Bewertung ohne PC-Kategorie wäre voller Einzelteile
-    if (min_gpu or min_ram) and evaluate not in ("pc", "gpu"):
-        result.warnings.append("gpu:/ram: wirken nur zusammen mit bewertung:pc")
+    if min_gpu and evaluate not in ("pc", "gpu"):
+        result.warnings.append("gpu: wirkt nur zusammen mit bewertung:pc/gpu")
+    if min_ram and evaluate not in ("pc", "ram"):
+        result.warnings.append("ram: wirkt nur zusammen mit bewertung:pc/ram")
     if min_deal is not None and not evaluate:
         result.warnings.append("deal: wirkt nur zusammen mit bewertung")
     if min_price is not None and max_price is not None and min_price > max_price:
