@@ -1,0 +1,24 @@
+# Tracker CI: alle Tests offline (TRACKER_OFFLINE=1 per conftest), bei jedem Push.
+#
+# Das Runner-Image (nest-ci) hat Python 3.13, aber weder pip noch venv.
+# uv ist eine einzelne Binärdatei und bringt beides mit, ohne das Image
+# anzufassen, das Nests CI gehört.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: uv installieren
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Tests
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run --python 3.13 --with-requirements requirements.txt --with pytest python -m pytest -q
