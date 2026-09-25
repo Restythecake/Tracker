@@ -39,7 +39,7 @@ def test_dsl_full_line():
 def test_dsl_defaults_and_comparisons():
     s = parse_line("thinkpad t14 <600 >150 zustand:gebraucht kauf:sofort").search
     assert s.name == "thinkpad t14" and (s.min_price, s.max_price) == (150, 600)
-    assert s.condition == "used" and s.buying == "fixed" and s.sources == ["ebay", "kleinanzeigen"]
+    assert s.condition == "used" and s.buying == "fixed" and s.sources == ["ebay", "kleinanzeigen", "vinted"]
 
 
 def test_dsl_paused_invalid_and_duplicates():

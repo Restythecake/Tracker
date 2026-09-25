@@ -115,3 +115,18 @@ def test_deal_threshold_keeps_normal_prices_silent():
     shown = {m.listing.item_id: m.silent for m in engine.store.recent_matches(include_silent=True)}
     # 880 € = ratio 0.89 > 0.8 -> still in der Galerie; 700 € = 0.71 -> gemeldet
     assert shown == {"1": 1, "2": 0}, shown
+
+
+@pytest.mark.parametrize("title", [
+    "Acer TravelMate P259-G2-M 15,6\" FHD i5-7200U 4GB DDR4 128GB 500GB",
+    "Mini PC intel nuc Intel I 3 7100u 8gb RAM ddr4 128gb M2 USB 3.0",
+    "HP-250 G7 / 15.6“ FHD / 8GB DDR4 / 128GB SSD / Windows 11",
+    "Tausche 128 GB Kingston DDR5-5600 4×32 GB gegen 2x64gb DDR5-6000",
+])
+def test_ram_mode_rejects_computers_and_swaps(title):
+    """Die sieben Fehlalarme vom 25.09. 02:18."""
+    assert not assess_ram(title, 60).ok
+
+
+def test_ssd_after_ddr_is_not_ram():
+    assert extract_specs("Laptop 8GB DDR4 128GB SSD").ram_gb == 8

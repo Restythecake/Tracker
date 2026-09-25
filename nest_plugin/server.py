@@ -34,7 +34,7 @@ from .widgets import WIDGETS
 log = logging.getLogger(__name__)
 
 ICON_DIR = Path(__file__).parent / "icons"
-IMAGE_HOSTS = ("i.ebayimg.com", "img.kleinanzeigen.de")
+IMAGE_HOSTS = ("i.ebayimg.com", "img.kleinanzeigen.de", ".vinted.net")
 MAX_IMAGE = 2 * 1024 * 1024
 MAX_BODY = 1024 * 1024
 
@@ -55,7 +55,8 @@ class ImageCache:
 
     def get(self, url: str) -> tuple[bytes, str] | None:
         host = urlsplit(url).hostname or ""
-        if urlsplit(url).scheme != "https" or host not in IMAGE_HOSTS:
+        allowed = any(host == h or (h.startswith(".") and host.endswith(h)) for h in IMAGE_HOSTS)
+        if urlsplit(url).scheme != "https" or not allowed:
             return None
         name = hashlib.sha256(url.encode()).hexdigest()[:32]
         path = self.dir / name

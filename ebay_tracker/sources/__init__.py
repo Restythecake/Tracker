@@ -9,6 +9,7 @@ from .base import Source, SourceError
 from .ebay_api import EbayApiSource
 from .kleinanzeigen import KleinanzeigenSource
 from .scraper import EbayScraperSource
+from .vinted import VintedSource
 
 log = logging.getLogger(__name__)
 
@@ -99,4 +100,5 @@ def create_source(settings: Settings) -> MultiSource:
     return MultiSource({
         "ebay": create_ebay_source(settings),
         "kleinanzeigen": KleinanzeigenSource(settings),
+        "vinted": VintedSource(settings),
     })

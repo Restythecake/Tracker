@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 SOURCE_LABELS = {
     "ebay": "eBay",
     "kleinanzeigen": "Kleinanzeigen",
+    "vinted": "Vinted",
 }
 
 
@@ -31,6 +32,9 @@ class Listing:
     shipping_note: str | None = None  # "Versand möglich" / "Nur Abholung"
     is_new: bool | None = None  # Zustand laut Detailseite
     details_loaded: bool = False
+    seller_since: str | None = None  # ISO-Datum, seit wann der Account aktiv ist (Kleinanzeigen)
+    seller_name: str | None = None
+    price_before: float | None = None  # gesetzt, wenn der Preis seit dem letzten Lauf gefallen ist
     assessment: dict | None = None  # hardware.Assessment.to_dict()
 
     @property

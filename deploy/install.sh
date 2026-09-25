@@ -48,6 +48,19 @@ else
   api POST "/plugins/$PLUGIN_ID/update" "{\"source\":\"container\",\"ref\":\"$CONTAINER\"}" | field "['version']"
 fi
 
+token_ok=$(docker exec "$CONTAINER" python -c "
+import sys; sys.path.insert(0,'/app')
+from pathlib import Path
+from nest_plugin.__main__ import persisted_token
+from nest_plugin.nest_client import NestClient
+try:
+    NestClient(token=persisted_token(Path('/data'))).self_view(); print('ok')
+except Exception as e: print('no')" 2>/dev/null || echo no)
+if [ "$token_ok" = ok ]; then
+  echo "==> Token auf dem Volume ist gültig – keine Rotation nötig"
+  echo "==> Health laut Nest"; api GET "/plugins/$PLUGIN_ID/health"; echo
+  exit 0
+fi
 echo "==> Token in den Container übernehmen"
 api POST "/plugins/$PLUGIN_ID/apply-token" '{}' | python3 -c "
 import json,sys; d=json.load(sys.stdin)

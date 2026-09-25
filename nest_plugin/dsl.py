@@ -24,6 +24,8 @@ jede Suche eine Zeile in einer kleinen Syntax, die man ohne Anleitung lesen kann
 | ``a b | c d``             | mehrere Suchbegriffe, Treffer zusammengeführt    |
 | ``kat:pc``                | nur Kategorie PCs                                |
 | ``bewertung:pc``          | Hardware lesen, Preis bewerten, nur Deals melden |
+| ``bewertung:gpu``         | einzelne Grafikkarte gegen ihren Marktwert       |
+| ``bewertung:ram``         | RAM-Kit gegen Marktwert je GB/Generation         |
 | ``gpu:3080``              | mit Bewertung: mindestens diese Grafikkarten-Klasse |
 | ``deal:0.8``              | mit Bewertung: nur melden, wenn ≤ 80 % des Teilewerts |
 | ``ram:32``                | mit Bewertung: mindestens so viel RAM            |
@@ -44,6 +46,8 @@ SOURCE_ALIASES = {
     "kleinanzeigen": "kleinanzeigen",
     "ka": "kleinanzeigen",
     "ebay-kleinanzeigen": "kleinanzeigen",
+    "vinted": "vinted",
+    "vi": "vinted",
 }
 _NUM = r"(\d+(?:[.,]\d+)?)\s*€?"
 _RANGE = re.compile(rf"^{_NUM}\s*-\s*{_NUM}$")
@@ -153,6 +157,8 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
                         evaluate, category = "pc", "pc"
                     elif value in ("ram", "speicher"):
                         evaluate = "ram"
+                    elif value in ("gpu", "grafikkarte", "graka"):
+                        evaluate = "gpu"
                     else:
                         raise ValueError
                 elif key in ("deal", "maxratio"):
@@ -183,7 +189,7 @@ def parse_line(line: str, default_sources: list[str] | None = None) -> ParsedSea
         return result
     if evaluate == "pc" and category is None:
         category = "pc"  # eine PC-Bewertung ohne PC-Kategorie wäre voller Einzelteile
-    if (min_gpu or min_ram) and evaluate != "pc":
+    if (min_gpu or min_ram) and evaluate not in ("pc", "gpu"):
         result.warnings.append("gpu:/ram: wirken nur zusammen mit bewertung:pc")
     if min_deal is not None and not evaluate:
         result.warnings.append("deal: wirkt nur zusammen mit bewertung")

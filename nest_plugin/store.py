@@ -109,8 +109,8 @@ class Match:
     search: str
     key: str
     first_seen: datetime
-    notified: bool
-    silent: bool
+    notified: int  # 0 nein, 1 per Push, 2 beim Einlesen bekannt
+    silent: int
     listing: Listing
 
 
@@ -130,7 +130,8 @@ class Store:
     # Spalten, die nach 0.1.0 dazukamen. CREATE TABLE IF NOT EXISTS legt sie
     # auf einem bestehenden Volume nicht an.
     _LISTING_COLUMNS = {"description": "TEXT", "dealer": "INTEGER DEFAULT 0", "shipping_note": "TEXT",
-                        "condition": "TEXT", "assessment": "TEXT"}
+                        "condition": "TEXT", "assessment": "TEXT", "seller_since": "TEXT",
+                        "details_loaded": "INTEGER DEFAULT 0", "is_new": "INTEGER"}
 
     def _migrate(self) -> None:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(listings)")}
@@ -238,12 +239,13 @@ class Store:
     def upsert_listing(self, listing: Listing) -> None:
         at = iso(now())
         assessment = json.dumps(listing.assessment, ensure_ascii=False) if listing.assessment else None
+        is_new = None if listing.is_new is None else int(listing.is_new)
         with self._lock:
             self.conn.execute(
                 """INSERT INTO listings (key, source, item_id, title, price, price_note, currency, url,
                        image_url, location, first_seen, last_seen, description, dealer, shipping_note,
-                       condition, assessment)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       condition, assessment, seller_since, details_loaded, is_new)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(key) DO UPDATE SET
                        title = excluded.title, price = excluded.price, price_note = excluded.price_note,
                        image_url = COALESCE(excluded.image_url, listings.image_url),
@@ -253,11 +255,14 @@ class Store:
                        shipping_note = COALESCE(excluded.shipping_note, listings.shipping_note),
                        condition = COALESCE(excluded.condition, listings.condition),
                        assessment = COALESCE(excluded.assessment, listings.assessment),
+                       seller_since = COALESCE(excluded.seller_since, listings.seller_since),
+                       details_loaded = MAX(excluded.details_loaded, listings.details_loaded),
+                       is_new = COALESCE(excluded.is_new, listings.is_new),
                        last_seen = excluded.last_seen""",
                 (listing.key, listing.source, listing.item_id, listing.title, listing.price,
                  listing.price_note, listing.currency, listing.url, listing.image_url,
                  listing.location, at, at, listing.description, int(listing.dealer), listing.shipping_note,
-                 listing.condition, assessment),
+                 listing.condition, assessment, listing.seller_since, int(listing.details_loaded), is_new),
             )
 
     def known_listing(self, key: str) -> bool:
@@ -307,19 +312,33 @@ class Store:
             self.conn.commit()
             return changed
 
-    # matches.silent: 0 = gemeldet/meldbar, 1 = still (erster Lauf oder kein Deal,
-    # aber sichtbar in der Galerie), 2 = versteckt (nach Detailprüfung ungeeignet)
-    def add_match(self, search: str, listing: Listing, *, silent: bool | int) -> None:
+    # matches.silent:   0 = Deal/meldbar, 1 = passt, aber kein Deal (Galerie),
+    #                   2 = versteckt (nach Detailprüfung ungeeignet)
+    # matches.notified: 0 = noch nicht gemeldet, 1 = per Push gemeldet,
+    #                   2 = beim stillen Einlesen schon da gewesen ("bekannt")
+    def add_match(self, search: str, listing: Listing, *, silent: bool | int, known: bool = False) -> None:
         with self._lock:
             self.upsert_listing(listing)
-            # INSERT OR IGNORE: first_seen ist "zum ersten Mal gesehen" und bleibt.
-            # Beim zweiten Lauf kann silent sinken (Deal-Schwelle fällt, Details
-            # nachgeladen) -- aber niemals steigen: einmal gemeldet bleibt gemeldet.
             self.conn.execute(
-                """INSERT INTO matches (search, key, first_seen, notified, silent) VALUES (?, ?, ?, 0, ?)
-                   ON CONFLICT(search, key) DO UPDATE SET silent = MIN(matches.silent, excluded.silent)""",
-                (search, listing.key, iso(now()), int(silent)),
+                """INSERT INTO matches (search, key, first_seen, notified, silent) VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(search, key) DO UPDATE SET silent = excluded.silent""",
+                (search, listing.key, iso(now()), 2 if known else 0, int(silent)),
             )
+
+    def hide_matches(self, search: str, keys: list[str]) -> int:
+        """Treffer, die bei der aktuellen Bewertung durchfallen, aus der Anzeige nehmen."""
+        if not keys:
+            return 0
+        with self._lock:
+            cur = self.conn.execute(
+                f"UPDATE matches SET silent = 2 WHERE search = ? AND silent != 2 AND key IN ({','.join('?' * len(keys))})",
+                (search, *keys))
+            return cur.rowcount
+
+    def match_row(self, search: str, key: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute("SELECT silent, notified, first_seen FROM matches WHERE search = ? AND key = ?",
+                                     (search, key)).fetchone()
 
     def mark_notified(self, search: str, key: str) -> None:
         with self._lock:
@@ -356,12 +375,12 @@ class Store:
             rows = self.conn.execute(sql, args).fetchall()
         return [
             Match(search=r["search"], key=r["key"], first_seen=parse_iso(r["first_seen"]),
-                  notified=bool(r["notified"]), silent=bool(r["silent"]), listing=_listing(r))
+                  notified=int(r["notified"]), silent=int(r["silent"]), listing=_listing(r))
             for r in rows
         ]
 
     def count_new_since(self, since: datetime, searches: list[str] | None = None) -> int:
-        sql = "SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND first_seen >= ?"
+        sql = "SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND notified != 2 AND first_seen >= ?"
         args: list[Any] = [iso(since)]
         if searches is not None:
             sql += f" AND search IN ({','.join('?' * len(searches)) or 'NULL'})"
@@ -406,10 +425,12 @@ def _listing(row: sqlite3.Row) -> Listing:
         return row[name] if name in keys else None
 
     raw = col("assessment")
+    is_new = col("is_new")
     return Listing(
         item_id=row["item_id"], title=row["title"], price=row["price"], price_note=row["price_note"],
         currency=row["currency"] or "EUR", url=row["url"], image_url=row["image_url"],
         location=row["location"], source=row["source"], description=col("description"),
         dealer=bool(col("dealer")), shipping_note=col("shipping_note"), condition=col("condition"),
-        assessment=json.loads(raw) if raw else None,
+        assessment=json.loads(raw) if raw else None, seller_since=col("seller_since"),
+        details_loaded=bool(col("details_loaded")), is_new=None if is_new is None else bool(is_new),
     )

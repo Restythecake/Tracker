@@ -16,9 +16,10 @@ PLUGIN_ID = "arthur.tracker"
 SEARCH_HELP = (
     "Eine Suche pro Eintrag. Wörter = Suchbegriff · +wort muss im Titel stehen · ~wort eines davon · "
     "-wort darf nicht vorkommen · max:600 / min:150 / 150-600 Preis · @ebay / @kleinanzeigen nur diese "
-    "Quelle · plz:10115 umkreis:30 · zustand:gebraucht · kauf:sofort · name:\"Anzeigename\" · "
-    "a | b mehrere Suchbegriffe · kat:pc nur PCs · bewertung:pc liest GPU/CPU/RAM, bewertet den Preis "
-    "und meldet nur Deals · gpu:3080 / ram:32 Mindestausstattung · // am Anfang pausiert die Suche."
+    "Quelle (@vinted auch) · plz:10115 umkreis:30 · zustand:gebraucht · kauf:sofort · name:\"Anzeigename\" · "
+    "a | b mehrere Suchbegriffe · kat:pc nur PCs · bewertung:pc|gpu|ram bewertet den Preis und meldet "
+    "nur Deals · deal:0.8 nur unter 80 % des Werts · gpu:3080 / ram:32 Mindestausstattung · "
+    "// am Anfang pausiert die Suche."
 )
 
 MANIFEST = {
@@ -83,7 +84,7 @@ MANIFEST = {
                 "x-nest-placeholder": "thinkpad t14 32gb max:600 +32gb -defekt",
             },
             "default_sources": {
-                "type": "array", "items": {"type": "string", "enum": ["ebay", "kleinanzeigen"]},
+                "type": "array", "items": {"type": "string", "enum": ["ebay", "kleinanzeigen", "vinted"]},
                 "title": "Quellen", "description": "Wo gesucht wird, wenn eine Suche kein @ebay/@kleinanzeigen nennt.",
                 "default": ["ebay", "kleinanzeigen"],
             },
@@ -118,6 +119,15 @@ MANIFEST = {
                 "type": "string", "enum": ["EBAY_DE", "EBAY_AT", "EBAY_CH", "EBAY_US", "EBAY_GB", "EBAY_FR",
                                            "EBAY_IT", "EBAY_ES", "EBAY_NL"],
                 "default": "EBAY_DE", "title": "eBay-Marktplatz", "x-nest-advanced": True,
+            },
+            "restock_interval_seconds": {
+                "type": "integer", "minimum": 30, "maximum": 3600, "default": 60,
+                "title": "Restock: Prüfintervall (Sekunden)",
+                "description": "Eigener Takt für die Shop-Verfügbarkeit, unabhängig von den Suchen.",
+            },
+            "digest_hour": {
+                "type": "integer", "minimum": 0, "maximum": 23, "default": 19,
+                "title": "Tagesüberblick um (Uhr)", "description": "0 = aus. Faire Angebote und Preissenkungen gesammelt.",
             },
             "restock_urls": {
                 "type": "array", "items": {"type": "string"}, "title": "Restock: Shop-URLs",

@@ -21,7 +21,11 @@ from typing import Any, Callable
 
 from ebay_tracker.config import MARKETPLACES, Search, Settings
 from ebay_tracker.filters import rejection_reason
-from ebay_tracker.hardware import Assessment, assess, assess_ram, market_note, requirements_from
+from ebay_tracker import hardware
+from ebay_tracker.fraud import assess_risk
+from ebay_tracker.geo import Geocoder, plz_of, trip_cost
+from ebay_tracker.hardware import Assessment, assess, assess_gpu, assess_ram, market_note, requirements_from
+from ebay_tracker.market import Market
 from ebay_tracker.restock import UVP_SWITCH2_ZELDA, run_checks
 from ebay_tracker.models import SOURCE_LABELS, Listing
 from ebay_tracker.sources import MultiSource, create_source
@@ -68,6 +72,8 @@ class PluginSettings:
     ebay_client_secret: str = ""
     # Shop-URLs für den Restock-Check (leer = eingebaute Defaults). JSON-Liste.
     restock_urls: list[str] = field(default_factory=list)
+    restock_interval_seconds: int = 60
+    digest_hour: int = 19  # 0 = aus
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "PluginSettings":
@@ -102,6 +108,8 @@ class PluginSettings:
         pick("ebay_marketplace", str, lambda v: v in MARKETPLACES)
         pick("ebay_client_id", str)
         pick("ebay_client_secret", str)
+        pick("restock_interval_seconds", int, lambda v: 30 <= v <= 3600)
+        pick("digest_hour", int, lambda v: 0 <= v <= 23)
         if raw.get("restock_urls") is not None:
             if isinstance(raw["restock_urls"], list):
                 s.restock_urls = [str(x) for x in raw["restock_urls"]]
@@ -126,11 +134,19 @@ def format_notification(search_name: str, listing: Listing) -> tuple[str, str]:
     meta = " · ".join(x for x in (listing.source_label, listing.location, listing.shipping_note) if x)
     a = listing.assessment
     if not a:
-        return f"{listing.price_text} – {search_name}", "\n".join(x for x in (listing.title, meta, listing.url) if x)
+        prefix = f"↓ von {int(listing.price_before)} € " if listing.price_before else ""
+        return (f"{prefix}{listing.price_text} – {search_name}",
+                "\n".join(x for x in (listing.title, meta, listing.url) if x))
     head = " · ".join(x for x in (listing.price_text, a.get("summary")) if x)
     warn = "⚠️ " if a.get("verdict") == "verdaechtig" else ""
-    title = f"{warn}{a.get('label')}: {head}"
+    label = a.get("label")
+    if listing.price_before and listing.price:
+        pct = int(round((1 - listing.price / listing.price_before) * 100))
+        label = f"Preis −{pct} %"
+    title = f"{warn}{label}: {head}"
     lines = [listing.title]
+    if listing.price_before:
+        lines.append(f"↓ vorher {int(listing.price_before)} €")
     lines += [f"✓ {p}" for p in a.get("pros", [])[:5]]
     lines += [f"✗ {c}" for c in a.get("cons", [])[:4]]
     lines += [meta, listing.url]
@@ -165,6 +181,7 @@ class RunSummary:
     errors: dict[str, str] = field(default_factory=dict)
     notified: int = 0
     notify_error: str | None = None
+    gpus: set[str] = field(default_factory=set)
 
 
 class Engine:
@@ -187,6 +204,11 @@ class Engine:
         self.last_run: RunSummary | None = None
         self.next_run_at: datetime | None = None
         self.nest_status: str | None = None  # letzter Fehler beim Rückruf zu Nest
+        # Offline (Tests): keine Shop-, Markt- oder Geo-Abfragen ins Netz
+        self.offline = os.environ.get("TRACKER_OFFLINE") == "1" or os.environ.get("TRACKER_DISABLE_RESTOCK") == "1"
+        self.geo = None if self.offline else Geocoder(store.get_meta, store.set_meta)
+        self.market = None if self.offline else Market(store.get_meta, store.set_meta)
+        self._restock_thread: threading.Thread | None = None
         self._apply(self.settings)
 
     # ---------------------------------------------------------- settings
@@ -268,6 +290,9 @@ class Engine:
                 searches = list(self.active_searches)
                 source = self.source
                 settings = self.settings
+            if self.market is not None:
+                hardware.GPU_MARKET.clear()
+                hardware.GPU_MARKET.update(self.market.overrides())
             for i, search in enumerate(searches):
                 if i:
                     self.pause(random.uniform(1.5, 3.5))  # Marktplätze nicht fluten
@@ -282,20 +307,85 @@ class Engine:
             })
             if random.random() < 0.05:
                 self.store.prune()
-            self._check_restock(settings)
+            relevant = {g for g in summary.gpus
+                        if hardware.GPUS.get(hardware.market_key(g), ("", 0, 0))[1] >= 80}
+            if self.market is not None and relevant:
+                try:
+                    self.market.refresh_stale(relevant, limit=3,
+                                              ebay_blocked=source.paused("ebay") > 0 if source else True)
+                except Exception:
+                    log.exception("Marktpreise nicht aktualisierbar")
+            self._maybe_digest(settings)
             return summary
 
     DETAIL_BUDGET = 6  # Detailseiten je bewerteter Suche und Lauf
+    DROP = 0.92         # ab 8 % billiger gilt ein Preis als gesenkt
 
-    def _assess(self, search: Search, listing: Listing, *, with_market: bool = False) -> Assessment:
+    # ------------------------------------------------------------ bewerten
+    def _quick(self, search: Search, listing: Listing) -> Assessment | None:
+        """Bewertung nur aus Titel/Preis -- entscheidet, ob eine Anzeige überhaupt passt."""
         req = requirements_from(search.min_gpu, search.min_ram)
-        a = assess(listing.title, listing.price, description=listing.description or "", req=req,
-                   new=listing.is_new, dealer=listing.dealer)
-        if with_market and a.specs.gpu:
+        if search.evaluate == "ram":
+            return assess_ram(listing.title, listing.price, description=listing.description or "")
+        if search.evaluate == "gpu":
+            return assess_gpu(listing.title, listing.price, description=listing.description or "", req=req,
+                              new=listing.is_new)
+        if search.evaluate == "pc":
+            return assess(listing.title, listing.price, description=listing.description or "", req=req,
+                          new=listing.is_new, dealer=listing.dealer)
+        return None
+
+    def _full(self, search: Search, listing: Listing, settings: PluginSettings) -> Assessment:
+        """Volle Bewertung: plus Marktvergleich, Fahrtkosten, Betrugsrisiko."""
+        a = self._quick(search, listing)
+        assert a is not None
+        if not a.ok:
+            return a
+        # Abholung: Fahrtkosten einrechnen (nur Kleinanzeigen, dort holt man ab)
+        home = (search.plz or settings.kleinanzeigen_plz or "").strip()
+        plz = plz_of(listing.location)
+        if (listing.source == "kleinanzeigen" and home and plz and listing.price
+                and a.ratio is not None and a.ratio < 1.1 and self.geo is not None):
+            km = self.geo.road_km(home, plz)
+            if km is not None and km > 15:
+                cost = trip_cost(km)
+                eff = self._quick(search, Listing(**{**listing.__dict__, "price": listing.price + cost}))
+                if eff is not None and eff.ok:
+                    a = eff
+                a.trip_km, a.trip_cost = km, cost
+                a.cons.append(f"Abholung ~{km} km, ~{cost} € Fahrt eingerechnet")
+            elif km is not None:
+                a.trip_km, a.trip_cost = km, 0
+                a.pros.append(f"Abholung um die Ecke (~{km} km)")
+        if a.specs.gpu and search.evaluate == "pc":
             a.market = market_note(listing.price, self.store.market_prices(a.specs.gpu))
             if a.market:
                 (a.pros if " unter " in a.market else a.cons).append(a.market)
+        # Betrugssignale
+        risk = assess_risk(listing.title, listing.description, price_ratio=a.ratio,
+                           seller_since=listing.seller_since)
+        a.risk = risk.score
+        if risk.score >= 25:
+            a.cons.insert(0, f"Risiko {risk.level} ({risk.score}/100): " + "; ".join(risk.reasons[:3]))
+        if risk.score >= 50 and a.verdict in ("top", "gut"):
+            a.verdict = "verdaechtig"
         return a
+
+    def _merge_known(self, listing: Listing) -> Listing | None:
+        """Schon geladene Details (Beschreibung, Account-Alter, Zustand) übernehmen.
+
+        Eine frisch gescrapte Anzeige kennt nur Titel/Preis; ohne das würde jede
+        Anzeige bei jedem Lauf ihre Detailseite erneut laden."""
+        stored = self.store.listing(listing.key)
+        if stored is not None and stored.details_loaded:
+            listing.description = listing.description if listing.details_loaded else stored.description
+            listing.seller_since = listing.seller_since or stored.seller_since
+            listing.dealer = listing.dealer or stored.dealer
+            listing.condition = listing.condition or stored.condition
+            if listing.is_new is None:
+                listing.is_new = stored.is_new
+            listing.details_loaded = True
+        return stored
 
     def _check_restock(self, settings: PluginSettings, *, session=None) -> None:
         """Händler abfragen und bei Wechsel auf "verfügbar" sofort melden.
@@ -349,7 +439,6 @@ class Engine:
         row = self.store.search_state(search.name)
         if row is not None and row["signature"] != sig:
             # Geändert (z. B. neuer Umkreis): die alten Treffer passen nicht mehr.
-            # Auch wenn die Suche schon (für die alte Fassung) eingelesen war.
             self.store.drop_matches(search.name)
             initialized = set()
         listings, errors = source.search_detailed(search)
@@ -359,88 +448,74 @@ class Engine:
             error = "; ".join(f"{SOURCE_LABELS.get(k, k)}: {v}" for k, v in errors.items())
             summary.errors[search.name] = error
 
-        matched: list[tuple[Listing, Assessment | None]] = []
+        # 1) grob filtern: Suchbegriffe/Preis und -- mit Bewertung -- Titel-Urteil
+        matched: list[Listing] = []
+        rejected: list[str] = []
         for listing in reversed(listings):  # älteste zuerst, dann stimmt die Reihenfolge der Meldungen
             if rejection_reason(listing, search) is not None:
+                rejected.append(listing.key)
                 continue
-            a = None
-            if search.evaluate == "ram":
-                a = assess_ram(listing.title, listing.price, description=listing.description or "")
-                if not a.ok:
+            quick = self._quick(search, listing)
+            if quick is not None:
+                if quick.specs.gpu and listing.price and search.evaluate == "pc":
+                    self.store.observe(listing.key, quick.specs.gpu, listing.price)
+                    summary.gpus.add(quick.specs.gpu)
+                if quick.specs.gpu and search.evaluate == "gpu":
+                    summary.gpus.add(quick.specs.gpu)
+                if not quick.ok:
+                    rejected.append(listing.key)
                     continue
-            elif search.evaluate == "pc":
-                a = self._assess(search, listing)
-                if a.specs.gpu and listing.price:
-                    self.store.observe(listing.key, a.specs.gpu, listing.price)
-                if not a.ok:
-                    continue
-            matched.append((listing, a))
+            matched.append(listing)
+        self.store.hide_matches(search.name, rejected)
 
-        new = silent_new = 0
+        # 2) je Treffer: Zustand bestimmen und entscheiden, ob gemeldet wird
+        new = quiet = 0
         budget = self.DETAIL_BUDGET
-        for listing, a in matched:
-            already = self.store.is_matched(search.name, listing.key)
-            if already and search.evaluate != "pc":
-                self.store.upsert_listing(listing)  # Preis kann sich geändert haben
-                continue
-            # Still, solange diese Quelle für diese Suche noch nie eingelesen wurde
-            silent: int = int(not settings.notify_first_run and listing.source not in initialized)
-            if already:
-                # PC-Bewertung läuft weiter: Details könnten inzwischen geladen
-                # sein (Budget) oder eine deal:-Schwelle stuft den Preis neu ein.
-                # add_match senkt silent nur (MIN) -- einmal gemeldet bleibt gemeldet.
-                if search.evaluate == "pc":
-                    if budget > 0 and not silent and not listing.details_loaded:
-                        budget -= 1
-                        self.pause(random.uniform(0.8, 1.8))
-                        source.load_details(listing)
-                    a = self._assess(search, listing, with_market=True)
-                    if a.ok and search.min_deal is not None and a.ratio is not None \
-                            and a.ratio > search.min_deal and a.verdict != "verdaechtig":
-                        silent = 1
-                    listing.assessment = a.to_dict()
-                self.store.upsert_listing(listing)
-                self.store.add_match(search.name, listing, silent=silent)
-                if silent:
-                    silent_new += 1
-                else:
-                    new += 1
-                continue
-            elif a is not None and not silent:
-                if budget > 0 and search.evaluate == "pc":
-                    # RAM-Einzelteile brauchen keine Detailseite: der Titel nennt
-                    # Kit-Größe und DDR-Generation, Zustand ist zweitrangig.
+        for listing in matched:
+            prev = self.store.match_row(search.name, listing.key)
+            stored = self._merge_known(listing)
+            prev_price = stored.price if stored is not None else None
+            first = not settings.notify_first_run and listing.source not in initialized
+
+            silent = 0
+            if search.evaluate:
+                if (not first and budget > 0 and not listing.details_loaded
+                        and search.evaluate in ("pc", "gpu") and listing.source != "vinted"):
                     budget -= 1
                     self.pause(random.uniform(0.8, 1.8))
                     source.load_details(listing)
-                if search.evaluate == "ram":
-                    a = assess_ram(listing.title, listing.price, description=listing.description or "")
-                else:
-                    a = self._assess(search, listing, with_market=True)
-                if a.ok and search.min_deal is not None and a.ratio is not None:
-                    # deal:0.75 -- der Nutzer will nur die echten Schnäppchen;
-                    # alles darüber bleibt in der Galerie (silent=1).
-                    if a.ratio > search.min_deal and a.verdict not in ("verdaechtig",):
-                        silent = 1
-                if not a.ok:
-                    silent = 2  # z. B. "Zustand Neu" oder RAM zu klein laut Beschreibung
-                elif not a.notify_worthy:
-                    silent = 1  # passt, aber kein Deal: in der Galerie, ohne Meldung
-            if a is not None:
+                a = self._full(search, listing, settings)
                 listing.assessment = a.to_dict()
-            self.store.add_match(search.name, listing, silent=silent)
-            if silent:
-                silent_new += 1
+                if not a.ok:
+                    silent = 2  # z. B. "Zustand Neu" laut Detailseite
+                elif (search.min_deal is not None and a.ratio is not None
+                      and a.ratio > search.min_deal and a.verdict != "verdaechtig"):
+                    silent = 1  # deal:-Schwelle nicht erreicht
+                elif not a.notify_worthy:
+                    silent = 1
+            dropped = bool(prev_price and listing.price and listing.price <= prev_price * self.DROP)
+            if dropped:
+                listing.price_before = prev_price
+
+            if prev is None:
+                notify = silent == 0 and not first
+                self.store.add_match(search.name, listing, silent=silent, known=first)
             else:
+                self.store.add_match(search.name, listing, silent=silent)
+                # Neu melden, wenn es gerade erst zum Deal wurde -- oder wenn der
+                # Preis eines schon gemeldeten/bekannten Deals deutlich fällt.
+                notify = silent == 0 and (prev["notified"] == 0 or dropped)
+            if notify:
                 new += 1
                 summary.new.append((search.name, listing))
+            elif prev is None:
+                quiet += 1
         self.store.commit()
-        prices = [l.price for l, _ in matched if l.price is not None and l.price > 0]
+        prices = [l.price for l in matched if l.price is not None and l.price > 0]
         self.store.record_run(search.name, sig, fetched=len(listings), matched=len(matched), new=new,
                               prices=prices, error=error, source_errors=errors, answered=answered)
-        log.info("[%s] %d geholt, %d passend, %d neu%s%s", search.name, len(listings), len(matched), new,
-                 f", {silent_new} still/aussortiert" if silent_new else "",
-                 f" – Fehler: {errors}" if errors else "")
+        log.info("[%s] %d geholt, %d passend, %d zu melden%s%s", search.name, len(listings), len(matched), new,
+                 f", {quiet} still" if quiet else "", f" – Fehler: {errors}" if errors else "")
 
     def _notify(self, summary: RunSummary, settings: PluginSettings) -> None:
         if not summary.new:
@@ -478,10 +553,68 @@ class Engine:
         self.store.commit()
         self.nest_status = None if not summary.notify_error else f"Benachrichtigung fehlgeschlagen: {summary.notify_error}"
 
+    # ---------------------------------------------------------- Tagesüberblick
+    def _maybe_digest(self, settings: PluginSettings, *, force: bool = False) -> bool:
+        """Einmal am Tag ab ``digest_hour``: was heute passiert ist, ohne Einzel-Pushes.
+
+        Einzelmeldungen gibt es nur für echte Deals; die "fairen" Angebote und
+        Preissenkungen darunter landen hier gesammelt."""
+        if not settings.digest_hour and not force:
+            return False
+        local = datetime.now().astimezone()
+        today = local.date().isoformat()
+        if not force and (local.hour < settings.digest_hour or self.store.get_meta("digest_date") == today):
+            return False
+        since = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        lines = []
+        best: list[tuple[float, str, Listing]] = []
+        for s in self.searches:
+            ms = self.store.recent_matches(limit=200, search=s.name, include_silent=True, since=since)
+            fresh = [m for m in ms if m.notified != 2]  # "bekannt" vom Einlesen zählt nicht
+            if not fresh:
+                continue
+            pushed = sum(1 for m in fresh if m.notified)
+            lines.append(f"{s.name}: {len(fresh)} neu, {pushed} gemeldet")
+            for m in fresh:
+                ratio = (m.listing.assessment or {}).get("ratio")
+                if ratio:
+                    best.append((ratio, s.name, m.listing))
+        restock = [r["shop"] for r in self.store.restock_rows() if r["available"]]
+        if restock:
+            lines.append("Zelda-Edition verfügbar bei: " + ", ".join(restock))
+        self.store.set_meta("digest_date", today)
+        if not lines:
+            return False
+        best.sort(key=lambda x: x[0])
+        if best:
+            lines.append("")
+            lines.append("Beste Preise heute:")
+            for ratio, name, l in best[:3]:
+                summ = (l.assessment or {}).get("summary") or l.title[:40]
+                lines.append(f"• {l.price_text} · {summ} ({int(ratio * 100)} % vom Wert)")
+        res = self.client.notify(title="Tracker – Tagesüberblick", body="\n".join(lines)[:4096], level="default")
+        return res.ok
+
     # ---------------------------------------------------------- scheduling
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, name="tracker-scheduler", daemon=True)
         self._thread.start()
+        if not self.offline:
+            self._restock_thread = threading.Thread(target=self._restock_loop, name="tracker-restock", daemon=True)
+            self._restock_thread.start()
+
+    def _restock_loop(self) -> None:
+        """Eigener Takt für Shop-Verfügbarkeit: beim Restock zählen Minuten, nicht zehn davon.
+
+        Fünf leichte Seitenabrufe je Minute sind für die Shops unauffällig;
+        die Marktplatz-Suche bleibt bei ihrem eigenen, langsameren Intervall."""
+        self._stop.wait(8)
+        while not self._stop.is_set():
+            try:
+                self._check_restock(self.settings)
+            except Exception:
+                log.exception("Restock-Lauf fehlgeschlagen")
+            self._stop.wait(self.settings.restock_interval_seconds * random.uniform(0.85, 1.15))
 
     def stop(self) -> None:
         self._stop.set()

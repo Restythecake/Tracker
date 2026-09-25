@@ -249,4 +249,15 @@ def parse_details(html: str, listing: Listing) -> None:
         listing.shipping_note = ship
     if soup.select_one('#viewad-contact a[href^="/pro/"], .badge-hint-pro-small-srp, [data-testid="pro-badge"]'):
         listing.dealer = True
+    contact = soup.select_one("#viewad-contact") or soup.select_one("#viewad-profile-box")
+    if contact is not None:
+        text = _text(contact)
+        m = re.search(r"Aktiv seit\s*(\d{2})\.(\d{2})\.(\d{4})", text)
+        if m:
+            listing.seller_since = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        if "Gewerblicher Nutzer" in text:
+            listing.dealer = True
+        name = contact.select_one("a[href*='/s-bestandsliste'], .userprofile-vip a, a[href^='/pro/']")
+        if name is not None:
+            listing.seller_name = _text(name)[:60]
     listing.details_loaded = True

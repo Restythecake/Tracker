@@ -12,7 +12,9 @@ Zwei Teile:
   mindestwerte und Warnzeichen. Heraus kommt ein Urteil mit Pro/Contra.
 
 Die Preis- und Leistungstabellen sind **Schätzungen** für den deutschen
-Gebrauchtmarkt (Stand Herbst 2026) und bewusst an einer Stelle gesammelt, damit
+Gebrauchtmarkt (Stand Herbst 2026, am 25.09. gegen Kleinanzeigen-Angebote
+kalibriert: Karten mit viel VRAM -- 3090, 4090, 50er -- sind wegen KI-Nachfrage
+weit teurer als ihre Spieleleistung vermuten lässt) und bewusst an einer Stelle gesammelt, damit
 man sie nachziehen kann. Die Leistungsindizes sind grob 1440p-Raster relativ zur
 RTX 4070 (=100) bzw. Gaming-CPU-Leistung relativ zum i7-12700 (=100).
 Zusätzlich vergleicht der Tracker mit den Preisen, die er selbst am Markt
@@ -29,16 +31,16 @@ from typing import Any
 # key: (Anzeigename, Leistungsindex, Gebrauchtpreis € für die Karte allein)
 GPUS: dict[str, tuple[str, int, int]] = {
     # NVIDIA RTX 50
-    "5090": ("RTX 5090", 230, 2000), "5080": ("RTX 5080", 160, 950), "5070ti": ("RTX 5070 Ti", 135, 700),
+    "5090": ("RTX 5090", 230, 4000), "5080": ("RTX 5080", 160, 1300), "5070ti": ("RTX 5070 Ti", 135, 950),
     "5070": ("RTX 5070", 108, 480), "5060ti": ("RTX 5060 Ti", 82, 340), "5060": ("RTX 5060", 70, 260),
     # RTX 40
-    "4090": ("RTX 4090", 190, 1500), "4080super": ("RTX 4080 Super", 150, 850), "4080": ("RTX 4080", 148, 800),
-    "4070tisuper": ("RTX 4070 Ti Super", 125, 620), "4070ti": ("RTX 4070 Ti", 118, 550),
-    "4070super": ("RTX 4070 Super", 112, 500), "4070": ("RTX 4070", 100, 450),
+    "4090": ("RTX 4090", 190, 2300), "4080super": ("RTX 4080 Super", 150, 920), "4080": ("RTX 4080", 148, 800),
+    "4070tisuper": ("RTX 4070 Ti Super", 125, 740), "4070ti": ("RTX 4070 Ti", 118, 550),
+    "4070super": ("RTX 4070 Super", 112, 580), "4070": ("RTX 4070", 100, 450),
     "4060ti": ("RTX 4060 Ti", 78, 280), "4060": ("RTX 4060", 64, 220),
     # RTX 30
-    "3090ti": ("RTX 3090 Ti", 112, 700), "3090": ("RTX 3090", 105, 600), "3080ti": ("RTX 3080 Ti", 102, 480),
-    "3080": ("RTX 3080", 95, 380), "3070ti": ("RTX 3070 Ti", 80, 290), "3070": ("RTX 3070", 75, 250),
+    "3090ti": ("RTX 3090 Ti", 112, 1250), "3090": ("RTX 3090", 105, 1100), "3080ti": ("RTX 3080 Ti", 102, 450),
+    "3080": ("RTX 3080", 95, 360), "3070ti": ("RTX 3070 Ti", 80, 290), "3070": ("RTX 3070", 75, 250),
     "3060ti": ("RTX 3060 Ti", 68, 220), "3060": ("RTX 3060", 55, 190), "3050": ("RTX 3050", 38, 130),
     # RTX 20 / GTX
     "2080ti": ("RTX 2080 Ti", 72, 260), "2080super": ("RTX 2080 Super", 62, 210), "2080": ("RTX 2080", 60, 190),
@@ -50,7 +52,7 @@ GPUS: dict[str, tuple[str, int, int]] = {
     "1070": ("GTX 1070", 35, 80), "1060": ("GTX 1060", 25, 55), "1050ti": ("GTX 1050 Ti", 16, 45),
     # AMD
     "rx9070xt": ("RX 9070 XT", 140, 600), "rx9070": ("RX 9070", 125, 520), "rx9060xt": ("RX 9060 XT", 80, 300),
-    "rx7900xtx": ("RX 7900 XTX", 160, 750), "rx7900xt": ("RX 7900 XT", 135, 600), "rx7900gre": ("RX 7900 GRE", 115, 480),
+    "rx7900xtx": ("RX 7900 XTX", 160, 800), "rx7900xt": ("RX 7900 XT", 135, 600), "rx7900gre": ("RX 7900 GRE", 115, 480),
     "rx7800xt": ("RX 7800 XT", 108, 420), "rx7700xt": ("RX 7700 XT", 92, 330), "rx7600xt": ("RX 7600 XT", 64, 250),
     "rx7600": ("RX 7600", 60, 210),
     "rx6950xt": ("RX 6950 XT", 112, 450), "rx6900xt": ("RX 6900 XT", 105, 400), "rx6800xt": ("RX 6800 XT", 100, 360),
@@ -134,6 +136,9 @@ class Assessment:
     pros: list[str] = field(default_factory=list)
     cons: list[str] = field(default_factory=list)
     market: str | None = None
+    risk: int | None = None
+    trip_km: int | None = None
+    trip_cost: int | None = None
 
     @property
     def label(self) -> str:
@@ -284,7 +289,9 @@ def find_ram(text: str, gpu_span: tuple[int, int] | None, max_vram: int = 12) ->
     if m:
         return int(m.group(1)) * int(m.group(2))
     keyed = [int(x) for x in re.findall(r"\b(\d{1,3})\s*gb\s*(?:ddr[345]|ram|arbeitsspeicher|speicher\b)", t)]
-    keyed += [int(x) for x in re.findall(r"\b(?:ddr[345]|ram|arbeitsspeicher)\s*:?\s*(\d{1,3})\s*gb", t)]
+    # "8GB DDR4 128GB SSD": die Zahl hinter "ddr4" gehört hier zur SSD, nicht zum RAM
+    keyed += [int(x) for x in re.findall(
+        r"\b(?:ddr[345]|ram|arbeitsspeicher)\s*:?\s*(\d{1,3})\s*gb(?!\s*(?:ssd|nvme|m\.?2|hdd|emmc|festplatte|speicherplatz))", t)]
     keyed += [int(x) for x in re.findall(r"\b(\d{2,3})\s*(?:gb\s*)?(?:ddr[345]\s*)?ram\b", t)]
     keyed = [x for x in keyed if x in RAM_SIZES]
     if keyed:
@@ -367,12 +374,29 @@ def ram_price_per_gb(kind: str) -> float:
             "ddr3": 0.5}[kind]
 
 
+# GPU-Name -> beobachteter Marktpreis (ebay_tracker.market). Wird vom Plugin
+# vor jedem Lauf gesetzt; leer = Tabellenwerte.
+GPU_MARKET: dict[str, float] = {}
+
+
+def market_key(gpu_name: str) -> str:
+    """Anzeigename -> Tabellenschlüssel ("RTX 3090" -> "3090")."""
+    return next((k for k, v in GPUS.items() if v[0] == gpu_name), "")
+
+
+def gpu_value(specs: "Specs") -> float | None:
+    if specs.gpu is None:
+        return None
+    return GPU_MARKET.get(specs.gpu) or specs.gpu_price
+
+
 def fair_price(specs: Specs, *, text: str = "") -> int | None:
     if not specs.gpu_price:
         return None
     ram = (specs.ram_gb or 16) * ram_price_per_gb(ram_kind(text))
+    gpu = gpu_value(specs) or specs.gpu_price
     ssd = (specs.ssd_tb or 0.5) * SSD_EUR_PER_TB
-    return int(round(specs.gpu_price + platform_value(specs.cpu_score) + ram + BASE_REST + ssd, -1))
+    return int(round(gpu + platform_value(specs.cpu_score) + ram + BASE_REST + ssd, -1))
 
 
 @dataclass
@@ -402,9 +426,19 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
     Arthur will 64-GB-Kits deutlich unter Marktpreis. "Unter dem Markt" ist
     konservativ: unter 65 % des ueblichen Gebrauchtpreises ist es ein Deal.
     """
+    if price is not None and price < 10:
+        price = None  # 1 €-Platzhalter ("VB", "Tausch") sind kein Preis
     specs = extract_specs(title, description)
     text = _norm(title + " " + description)
     kind = ram_kind(text)
+    t = _norm(title)
+    for pattern, label in REJECT_TERMS.items():
+        if re.search(pattern, t):
+            return Assessment(False, "ungeeignet", label, None, None, specs)
+    # Ganze Rechner mit viel RAM gehören in die PC-Suche, nicht hierher
+    if specs.cpu or re.search(r"\b(?:mini\s*pc|nuc|thinkpad|latitude|elitebook|macbook|imac|mac\s*pro|"
+                              r"workstation|tower|desktop\s*pc|all.in.one|windows\s*1[01]|ssd)\b", t):
+        return Assessment(False, "ungeeignet", "ganzer Rechner, kein RAM-Kit", None, None, specs)
     if specs.ram_gb is None or specs.ram_gb < 16:
         return Assessment(False, "ungeeignet", "RAM-Groesse nicht erkennbar oder unter 16 GB", None, None, specs)
     if specs.gpu is not None:
@@ -448,9 +482,56 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
     return a
 
 
+def assess_gpu(title: str, price: float | None, *, description: str = "",
+               req: "Requirements | None" = None, new: bool | None = None) -> Assessment:
+    """Einzelne Grafikkarte gegen ihren Marktwert (vor allem für Vinted/Einzelanzeigen)."""
+    req = req or Requirements()
+    if price is not None and price < 10:
+        price = None
+    specs = extract_specs(title, description)
+    specs.new = new
+    t = _norm(title)
+    for pattern, label in REJECT_TERMS.items():
+        if re.search(pattern, t):
+            return Assessment(False, "ungeeignet", label, None, None, specs)
+    if re.search(r"\bgaming\s*pc\b|\bpc\b.*\b(ryzen|i[579])\b|k(?:ü|ue)hlk(?:ö|oe)rper|keine\s*karte|"
+                 r"heatsink|backplate\b|nur\s*(?:k(?:ü|ue)hler|box|karton)", t):
+        return Assessment(False, "ungeeignet", "keine einzelne Grafikkarte", None, None, specs)
+    if specs.gpu is None:
+        return Assessment(False, "ungeeignet", "keine Grafikkarte erkennbar", None, None, specs)
+    if specs.gpu_index < req.min_gpu_index:
+        return Assessment(False, "ungeeignet", f"{specs.gpu} zu schwach", None, None, specs)
+    value = gpu_value(specs)
+    fair = int(round(value, -1))
+    src = "Markt" if specs.gpu in GPU_MARKET else "Schätzung"
+    pros = [f"{specs.gpu} (~{specs.gpu_index} % einer 4070)"]
+    cons: list[str] = []
+    if new:
+        cons.append("als neu gelistet")
+    if price is None or price <= 0:
+        return Assessment(True, "fair", None, fair, None, specs, pros, cons + ["Preis fehlt"])
+    ratio = price / value
+    if ratio < 0.55:
+        verdict = "verdaechtig"
+        cons.insert(0, "sehr weit unter Wert – nur mit Käuferschutz/Abholung kaufen")
+    elif ratio <= 0.8:
+        verdict = "top"
+    elif ratio <= 0.92:
+        verdict = "gut"
+    elif ratio <= 1.05:
+        verdict = "fair"
+    else:
+        verdict = "teuer"
+    diff = int(round((ratio - 1) * 100))
+    (pros if diff <= 0 else cons).append(f"{abs(diff)} % {'unter' if diff <= 0 else 'über'} {src} (~{fair} €)")
+    return Assessment(True, verdict, None, fair, round(ratio, 3), specs, pros, cons)
+
+
 def assess(title: str, price: float | None, *, description: str = "", req: Requirements | None = None,
            new: bool | None = None, dealer: bool = False, market: list[float] | None = None) -> Assessment:
     req = req or Requirements()
+    if price is not None and price < 10:
+        price = None
     specs = extract_specs(title, description)
     specs.new, specs.dealer = new, dealer
     text = _norm(title + " " + description)
@@ -514,7 +595,7 @@ def assess(title: str, price: float | None, *, description: str = "", req: Requi
     # Unter ~60 % des Teilewerts ist es auf Kleinanzeigen fast immer ein
     # Fake-Angebot (Vorkasse-Betrug) oder etwas stimmt nicht -- trotzdem melden,
     # aber deutlich: ein echter Glücksfall ist genau das, was man sehen will.
-    if price < specs.gpu_price * 0.8 or ratio < 0.62:
+    if price < (gpu_value(specs) or specs.gpu_price) * 0.8 or ratio < 0.62:
         verdict = "verdaechtig"
         cons.insert(0, "sehr weit unter Wert – nur ansehen und bei Abholung bar zahlen, nie Vorkasse")
     elif ratio <= 0.85:

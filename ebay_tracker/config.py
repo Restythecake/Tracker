@@ -20,7 +20,7 @@ MARKETPLACES = {
     "EBAY_NL": ("www.ebay.nl", "EUR"),
 }
 
-KNOWN_SOURCES = ("ebay", "kleinanzeigen")
+KNOWN_SOURCES = ("ebay", "kleinanzeigen", "vinted")
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
