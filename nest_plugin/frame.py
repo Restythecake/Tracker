@@ -45,19 +45,22 @@ FRAME_BASE_HEADER = "X-Nest-Frame-Base"
 
 
 def frame_base(headers: Any) -> str:
-    """Der Basispfad der Oberfläche: "" auf der Subdomain, sonst
-    `/plugins/frame/arthur-tracker/` (mit führendem und schließendem Slash).
-    Fremde oder falsch geformte Werte werden verworfen -- der Header kommt
-    von Nest, nicht vom Browser; der Browser könnte ihn nicht fälschen, aber
-    die Absicherung kostet nichts."""
+    """Der Basispfad der Oberfläche: "" auf der Subdomain, sonst der Mount
+    unter Nests Host -- `/arthur-tracker/`, mit führendem und schließendem
+    Slash (Nest sendet den Mount, nicht den gemeinsamen /plugins/frame/
+    Präfix; die relativen URLs brauchen nur den Teil, der zwischen Host und
+    eigenem Pfad liegt). Fremde oder falsch geformte Werte werden verworfen:
+    der Header kommt von Nest, nicht vom Browser -- und Nest streicht einen
+    vom Browser mitgeschickten gleichnamigen Header vorher, also ist das
+    hier die dritte Sperre, weil sie nichts kostet."""
     raw = ""
     try:
         raw = headers.get(FRAME_BASE_HEADER, "") or ""
     except Exception:
         return ""
-    if not raw or not raw.startswith("/plugins/frame/") or not raw.endswith("/"):
+    if not raw.startswith("/") or not raw.endswith("/"):
         return ""
-    label = raw[len("/plugins/frame/"):-1]
+    label = raw[1:-1]
     if not label or "/" in label:
         return ""
     return raw
@@ -178,7 +181,10 @@ JS = """
     window.parent.postMessage({type:'nest:ready'}, '*');
   }
   function open(path){
-    var url = BASE ? self.replace(/\/$/, '') + path : self + path;
+    // Ohne Basis ist der Pfad absolut auf der Subdomain (/?layout=page,
+    // /go/…). Mit Basis (Pfad-Modus) landet jeder Pfad unter dem Mount:
+    // führenden Slash ab, dann ans Basis-Ende (BASE endet mit /).
+    var url = BASE ? self + path.replace(/^[/]/, '') : self + path;
     if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, '*'); }
     else { window.open(url, '_blank', 'noopener'); }
   }
@@ -221,13 +227,14 @@ def _b() -> str:
 
 
 def _qs(**params: Any) -> str:
-    """Eine relative URL auf dieser Oberfläche, mit dem Basispfad der
-    Anfrage. Ohne Basis (Subdomain-Form) bleibt es der absolute Pfad; mit
-    Basis wird `/…` zu `/plugins/frame/<label>/…`."""
+    """Eine relative URL auf dieser Oberfläche. Ohne Basis (Subdomain-Form)
+    ist es `/` bzw. `/?…`; mit Basis wird daraus der Pfad unter dem Mount
+    (`/arthur-tracker/`, `/arthur-tracker/?s=…`) -- ohne doppelten Slash,
+    weil BASE schon mit / endet."""
     clean = {k: v for k, v in params.items() if v not in (None, "")}
     if clean:
-        return _b() + "/?" + urlencode(clean)
-    return _b() + "/"
+        return _b() + "?" + urlencode(clean) if _b() else "/?" + urlencode(clean)
+    return _b() if _b() else "/"
 
 
 def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
@@ -247,7 +254,7 @@ def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
         items += [f"<li class=c>✗ {esc(x)}</li>" for x in a.get("cons", [])[:3]]
         points = f"<ul class=pc>{''.join(items)}</ul>" if items else ""
     return (
-        f"<a class=card href='{esc(l.url)}' data-open='{_b()}/go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
+        f"<a class=card href='{esc(l.url)}' data-open='{_b()}go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
         f"<div class=img>{img}<span class=badge>{esc(l.source_label)}</span>{new_badge}{verdict}</div>"
         f"<div class=body><div class=price>{esc(l.price_text)}</div>{specs}"
         f"<div class=name>{esc(l.title)}</div><div class=meta>{esc(meta)}</div>{points}</div></a>"
@@ -297,7 +304,7 @@ def widget(engine: Engine, params: dict[str, str], base: str = "") -> str:
         "<div class=wrap><div class=top>"
         f"<div class=title>Tracker</div><div class=sub>{esc(when)}</div><div class=spacer></div>"
         f"<div class=chips>{''.join(chips)}</div>"
-        "<button class=btn data-open='/?layout=page'>Alles ansehen ↗</button>"
+        f"<button class=btn data-open='{_b()}?layout=page'>Alles ansehen ↗</button>"
         f"</div>{content}</div>"
     )
     return _page(body, base=base)
