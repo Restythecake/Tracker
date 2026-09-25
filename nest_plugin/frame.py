@@ -178,7 +178,7 @@ JS = """
     window.parent.postMessage({type:'nest:ready'}, '*');
   }
   function open(path){
-    var url = self + path;
+    var url = BASE ? self.replace(/\/$/, '') + path : self + path;
     if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, '*'); }
     else { window.open(url, '_blank', 'noopener'); }
   }
@@ -247,7 +247,7 @@ def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
         items += [f"<li class=c>✗ {esc(x)}</li>" for x in a.get("cons", [])[:3]]
         points = f"<ul class=pc>{''.join(items)}</ul>" if items else ""
     return (
-        f"<a class=card href='{esc(l.url)}' data-open='{_b()}go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
+        f"<a class=card href='{esc(l.url)}' data-open='{_b()}/go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
         f"<div class=img>{img}<span class=badge>{esc(l.source_label)}</span>{new_badge}{verdict}</div>"
         f"<div class=body><div class=price>{esc(l.price_text)}</div>{specs}"
         f"<div class=name>{esc(l.title)}</div><div class=meta>{esc(meta)}</div>{points}</div></a>"
