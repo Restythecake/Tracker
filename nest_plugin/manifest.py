@@ -125,6 +125,11 @@ MANIFEST = {
                                            "EBAY_IT", "EBAY_ES", "EBAY_NL"],
                 "default": "EBAY_DE", "title": "eBay-Marktplatz", "x-nest-advanced": True,
             },
+            "max_price_cap": {
+                "type": "integer", "minimum": 0, "maximum": 100000, "default": 1000,
+                "title": "Preis-Obergrenze für alle Suchen (€)",
+                "description": "Alles darüber wird ignoriert, egal welche Suche. 0 = keine Grenze.",
+            },
             "restock_interval_seconds": {
                 "type": "integer", "minimum": 30, "maximum": 3600, "default": 60,
                 "title": "Restock: Prüfintervall (Sekunden)",

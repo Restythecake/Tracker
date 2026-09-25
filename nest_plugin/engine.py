@@ -73,6 +73,8 @@ class PluginSettings:
     # Shop-URLs für den Restock-Check (leer = eingebaute Defaults). JSON-Liste.
     restock_urls: list[str] = field(default_factory=list)
     restock_interval_seconds: int = 60
+    # Harte Obergrenze für ALLE Suchen (0 = aus). Arthur: "alles über 1000 € ist zu viel".
+    max_price_cap: int = 1000
     digest_hour: int = 19  # 0 = aus
 
     @classmethod
@@ -109,6 +111,7 @@ class PluginSettings:
         pick("ebay_client_id", str)
         pick("ebay_client_secret", str)
         pick("restock_interval_seconds", int, lambda v: 30 <= v <= 3600)
+        pick("max_price_cap", int, lambda v: 0 <= v <= 100000)
         pick("digest_hour", int, lambda v: 0 <= v <= 23)
         if raw.get("restock_urls") is not None:
             if isinstance(raw["restock_urls"], list):
@@ -290,6 +293,8 @@ class Engine:
                 searches = list(self.active_searches)
                 source = self.source
                 settings = self.settings
+            if settings.max_price_cap:
+                self.store.hide_over_price(settings.max_price_cap)
             if self.market is not None:
                 hardware.GPU_MARKET.clear()
                 hardware.GPU_MARKET.update(self.market.overrides())
@@ -454,6 +459,10 @@ class Engine:
         rejected: list[str] = []
         for listing in reversed(listings):  # älteste zuerst, dann stimmt die Reihenfolge der Meldungen
             if rejection_reason(listing, search) is not None:
+                rejected.append(listing.key)
+                continue
+            cap = settings.max_price_cap
+            if cap and listing.price is not None and listing.price > cap:
                 rejected.append(listing.key)
                 continue
             quick = self._quick(search, listing)

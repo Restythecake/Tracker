@@ -115,3 +115,28 @@ def test_card_image_paths_are_nest_safe():
     for key in ("ebay:298703991859", "kleinanzeigen:3522300210", "vinted:10124793013"):
         p = image_path(key)
         assert re.fullmatch(r"/[A-Za-z0-9/._~+=-]+", p) and key_from_image(p[len("/img/"):]) == key
+
+
+import pytest
+
+
+@pytest.mark.parametrize("title", [
+    "Wasserkühlung für die Grafikkarte GeForce RTX 3090",
+    "Alphacool Eisblock MSI RTX 3090 Ti Suprim X waterblock",
+    "5090 RTX Msi Trio, Dissipatore + Scatola",
+    "EKWB Wasserkühler für ASUS TUF RX 7900 XTX OC",
+    "Cooling system from an Asus Rog Strix GeForce RTX 4090",
+])
+def test_gpu_mode_rejects_coolers_and_parts(title):
+    """Zubehör, das am 25.09. als 'Top-Deal' in 'Grafikkarten einzeln' stand."""
+    assert not assess_gpu(title, 90).ok
+
+
+def test_global_price_cap_hides_expensive():
+    ebay = FakeSource()
+    e, client = _engine({"ebay": ebay}, ["gaming pc @ebay"])
+    e.run_once()
+    ebay.items = [item("ebay", 1, price=900, title="gaming pc a"), item("ebay", 2, price=1400, title="gaming pc b")]
+    e.run_once()
+    shown = {m.listing.item_id for m in e.store.recent_matches(include_silent=True)}
+    assert shown == {"1"}

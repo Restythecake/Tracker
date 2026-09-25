@@ -500,7 +500,10 @@ def assess_gpu(title: str, price: float | None, *, description: str = "",
         if re.search(pattern, t):
             return Assessment(False, "ungeeignet", label, None, None, specs)
     if re.search(r"\bgaming\s*pc\b|\bpc\b.*\b(ryzen|i[579])\b|k(?:ü|ue)hlk(?:ö|oe)rper|keine\s*karte|"
-                 r"heatsink|backplate\b|nur\s*(?:k(?:ü|ue)hler|box|karton)", t):
+                 r"heatsink|backplate\b|nur\s*(?:k(?:ü|ue)hler|box|karton)|wasserk(?:ü|ue)hl|waterblock|"
+                 r"water\s*block|eisblock|\bblock\b|k(?:ü|ue)hler\b|cooler\b|cooling|dissipatore|scatola|"
+                 r"l(?:ü|ue)fter|fans?\b|shroud|halterung|riser|stütze|support\s*bracket|\bovp\s*only|leerkarton|"
+                 r"(?:ohne|nur)\s*(?:karte|gpu)", t):
         return Assessment(False, "ungeeignet", "keine einzelne Grafikkarte", None, None, specs)
     if specs.gpu is None:
         return Assessment(False, "ungeeignet", "keine Grafikkarte erkennbar", None, None, specs)

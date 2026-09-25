@@ -335,6 +335,15 @@ class Store:
                 (search, *keys))
             return cur.rowcount
 
+    def hide_over_price(self, cap: float) -> int:
+        """Obergrenze gesenkt: bestehende Treffer darüber sofort ausblenden."""
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE matches SET silent = 2 WHERE silent != 2 AND key IN "
+                "(SELECT key FROM listings WHERE price IS NOT NULL AND price > ?)", (cap,))
+            self.conn.commit()
+            return cur.rowcount
+
     def match_row(self, search: str, key: str) -> sqlite3.Row | None:
         with self._lock:
             return self.conn.execute("SELECT silent, notified, first_seen FROM matches WHERE search = ? AND key = ?",
