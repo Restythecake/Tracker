@@ -166,9 +166,14 @@ def make_handler(engine: Engine, images: ImageCache):
                         return self._send(200, icon.read_bytes(), "image/svg+xml")
                     return self._json(404, {"error": "no such icon"})
                 if path == "/":
+                    # Im Pfad-Modus (Frame unter Nests Host) setzt Nest der
+                    # Antwort X-Nest-Frame-Base auf den Pfad, unter dem der
+                    # Frame liegt; die Oberfläche präfixiert alle relativen
+                    # URLs damit. Auf der Subdomain fehlt der Header.
+                    base = frame.frame_base(self.headers)
                     if params.get("layout") == "page":
-                        return self._html(frame.page(engine, params))
-                    return self._html(frame.widget(engine, params))
+                        return self._html(frame.page(engine, params, base=base))
+                    return self._html(frame.widget(engine, params, base=base))
                 if path.startswith("/img/"):
                     raw = unquote(path[len("/img/"):])
                     # Neue Form "ebay-123" (Nest-Asset-Proxy), alte "ebay:123" (Galerie)

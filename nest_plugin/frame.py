@@ -6,9 +6,15 @@ Randbedingungen aus Nests Sandbox (PLUGIN-API §7), die das Design bestimmen:
   nur; Ansicht und Filter sind Query-Parameter, Schreiben geht über Nests
   Einstellungsformular und die Aktionsknöpfe.
 * ``img-src 'self' data:`` -- Bilder von eBay/Kleinanzeigen laufen über ``/img/<key>``.
-* Kein ``allow-popups``, und ``nest:open`` darf nur die *eigene* Origin öffnen.
+* Kein ``allow-popups``, und ``nest:open`` darf nur die *eigene* Adresse öffnen.
   Ein Klick auf ein Angebot öffnet deshalb ``/go/<key>`` im neuen Tab, und diese
   Seite leitet zum Marktplatz weiter.
+* Zwei Adressen (Arthur 2026-09-25): die Plugin-Subdomain (``plugin-arthur-tracker.
+  …``) und Nests eigener Host unter ``/plugins/frame/arthur-tracker/…`` -- der
+  Pfad ist der Fallback, wenn die Subdomain nicht auflöst (remote, kein
+  Wildcard-DNS). Der Server sagt über ``X-Nest-Frame-Base``, welche der beiden
+  gerade bedient wird; alle relativen URLs der Seite werden damit präfixiert,
+  damit sie im Pfad-Modus wieder beim Plugin landen.
 * ``scrolling="no"`` am iframe: gescrollt wird innerhalb der Seite.
 * Ohne ``allow-same-origin`` ist der Frame eine opake Origin -- er kann seine
   eigene Origin nicht per fetch lesen (kein CORS). Aktualisiert wird per Reload.
@@ -29,6 +35,32 @@ from .store import Match, now, parse_iso
 from .widgets import ago, until
 
 NEST_ORIGIN = os.environ.get("NEST_DASHBOARD_ORIGIN", "https://nest.mini.shibusa.moe")
+
+# Der Pfad, unter dem Nest diese Oberfläche im Pfad-Modus ausliefert
+# (/plugins/frame/<label>/…). Der Proxy setzt X-Nest-Frame-Base nur dort, wo
+# ein Frame wirklich unter Nests Host liegt; auf der Subdomain bleibt der
+# Header weg und die Seite bedient sich selbst. Ohne Header ist der Basis-
+# pfad leer -- alles bleibt bei den absoluten Pfaden der Subdomain-Form.
+FRAME_BASE_HEADER = "X-Nest-Frame-Base"
+
+
+def frame_base(headers: Any) -> str:
+    """Der Basispfad der Oberfläche: "" auf der Subdomain, sonst
+    `/plugins/frame/arthur-tracker/` (mit führendem und schließendem Slash).
+    Fremde oder falsch geformte Werte werden verworfen -- der Header kommt
+    von Nest, nicht vom Browser; der Browser könnte ihn nicht fälschen, aber
+    die Absicherung kostet nichts."""
+    raw = ""
+    try:
+        raw = headers.get(FRAME_BASE_HEADER, "") or ""
+    except Exception:
+        return ""
+    if not raw or not raw.startswith("/plugins/frame/") or not raw.endswith("/"):
+        return ""
+    label = raw[len("/plugins/frame/"):-1]
+    if not label or "/" in label:
+        return ""
+    return raw
 
 
 def esc(value: Any) -> str:
@@ -119,22 +151,35 @@ body.page{overflow:auto;background:var(--bg)}
 
 JS = """
 (function(){
-  var NEST = %(nest)s, root = document.documentElement;
+  var NEST = %(nest)s, BASE = %(base)s, root = document.documentElement;
   var embedded = window.parent !== window;
-  var self = location.protocol + '//' + location.host;
+  // Absolute Adresse dieser Oberfläche: Subdomain-Form ohne Basispfad, im
+  // Pfad-Modus Nests Origin + Basispfad. Alle relativen Pfade laufen darüber.
+  var self = location.protocol + '//' + location.host + BASE;
   function theme(t){ if(t === 'light'){root.classList.add('light')} else if(t === 'dark'){root.classList.remove('light')} }
   if(!embedded && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches){theme('light')}
   var qs = new URLSearchParams(location.search); if(qs.get('theme')){theme(qs.get('theme'))}
   window.addEventListener('message', function(e){
-    // Doppelt prüfen wie Nest selbst (§7.2): richtige Origin UND wirklich der Einbetter.
-    if(e.source !== window.parent || e.origin !== NEST) return;
+    // Doppelt prüfen wie Nest selbst: wirklich der Einbetter UND die richtige
+    // Absender-Origin. Eine sandboxed Frame-Origin ist opak -- der Browser
+    // meldet "null" statt der URL-Origin (nachgemessen, Playwright 2026-09-25).
+    // Nest akzeptiert deshalb genau: source === dieser Frame, und origin
+    // NEST (Subdomain-Form) oder "null" (Pfad-Form, opak). Alles andere ist
+    // nicht unser Einbetter.
+    if(e.source !== window.parent) return;
+    if(e.origin !== NEST && e.origin !== 'null') return;
     var d = e.data || {};
     if(d.type === 'nest:init' || d.type === 'nest:theme'){ theme(d.theme); try{sessionStorage.theme=d.theme}catch(_){} }
   });
-  if(embedded){ window.parent.postMessage({type:'nest:ready'}, NEST); }
+  if(embedded){
+    // Outbound ebenfalls '*': eine opake Origin bekommt postMessage mit
+    // konkretem Ziel nie zugestellt (nachgemessen). Sicher, weil der Frame
+    // sandboxed ist und Nest jede Nachricht an source und origin prüft.
+    window.parent.postMessage({type:'nest:ready'}, '*');
+  }
   function open(path){
     var url = self + path;
-    if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, NEST); }
+    if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, '*'); }
     else { window.open(url, '_blank', 'noopener'); }
   }
   document.addEventListener('click', function(e){
@@ -150,8 +195,8 @@ JS = """
 """
 
 
-def _page(body: str, *, page: bool = False, reload_ms: int = 90_000) -> str:
-    script = JS % {"nest": json.dumps(NEST_ORIGIN), "reload": reload_ms}
+def _page(body: str, *, page: bool = False, reload_ms: int = 90_000, base: str = "") -> str:
+    script = JS % {"nest": json.dumps(NEST_ORIGIN), "base": json.dumps(base), "reload": reload_ms}
     return (
         "<!doctype html><html lang=de><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -160,16 +205,36 @@ def _page(body: str, *, page: bool = False, reload_ms: int = 90_000) -> str:
     )
 
 
+# Der Basispfad, den die Seitenfunktionen gerade verwenden. Wird pro Anfrage
+# von widget()/page() gesetzt (thread-lokal, weil ThreadingHTTPServer jede
+# Anfrage in ihrem Thread bedient) und von den relativen URL-Helfern gelesen.
+import threading
+_base = threading.local()
+
+
+def _b() -> str:
+    """Der Basispfad der aktuellen Anfrage: "" auf der Subdomain, sonst
+    `/plugins/frame/<label>/`. Ein Modul-globaler Thread-Status ist hier
+    vertretbar, weil genau eine Anfrage einen Thread bedient und der Wert
+    vor dem Rendern gesetzt wird."""
+    return getattr(_base, "path", "") or ""
+
+
 def _qs(**params: Any) -> str:
+    """Eine relative URL auf dieser Oberfläche, mit dem Basispfad der
+    Anfrage. Ohne Basis (Subdomain-Form) bleibt es der absolute Pfad; mit
+    Basis wird `/…` zu `/plugins/frame/<label>/…`."""
     clean = {k: v for k, v in params.items() if v not in (None, "")}
-    return "/?" + urlencode(clean) if clean else "/"
+    if clean:
+        return _b() + "/?" + urlencode(clean)
+    return _b() + "/"
 
 
 def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
     l = m.listing
     a = l.assessment or {}
     is_new = not m.silent and m.first_seen and (now() - m.first_seen) < timedelta(hours=fresh_hours)
-    img = (f"<img src='/img/{quote(m.key, safe='')}' alt='' loading=lazy>" if l.image_url
+    img = (f"<img src='{_b()}img/{quote(m.key, safe='')}' alt='' loading=lazy>" if l.image_url
            else "<div class=ph>▢</div>")
     meta = " · ".join(x for x in (l.location, ago(m.first_seen)) if x)
     new_badge = "<span class='badge new'>Neu</span>" if is_new else ""
@@ -182,7 +247,7 @@ def _card(m: Match, *, fresh_hours: int = 24, detail: bool = False) -> str:
         items += [f"<li class=c>✗ {esc(x)}</li>" for x in a.get("cons", [])[:3]]
         points = f"<ul class=pc>{''.join(items)}</ul>" if items else ""
     return (
-        f"<a class=card href='{esc(l.url)}' data-open='/go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
+        f"<a class=card href='{esc(l.url)}' data-open='{_b()}go/{quote(m.key, safe='')}' title='{esc(l.title)}'>"
         f"<div class=img>{img}<span class=badge>{esc(l.source_label)}</span>{new_badge}{verdict}</div>"
         f"<div class=body><div class=price>{esc(l.price_text)}</div>{specs}"
         f"<div class=name>{esc(l.title)}</div><div class=meta>{esc(meta)}</div>{points}</div></a>"
@@ -202,8 +267,9 @@ def _search_state(engine: Engine, name: str) -> str:
     return "warn" if row["source_errors"] else "ok"
 
 
-def widget(engine: Engine, params: dict[str, str]) -> str:
+def widget(engine: Engine, params: dict[str, str], base: str = "") -> str:
     """Die Kachel: Kopfzeile mit Filtern, darunter eine waagerechte Kartenleiste."""
+    _base.path = base
     sel = params.get("s") or ""
     names = [s.name for s in engine.searches]
     if sel not in names:
@@ -234,11 +300,12 @@ def widget(engine: Engine, params: dict[str, str]) -> str:
         "<button class=btn data-open='/?layout=page'>Alles ansehen ↗</button>"
         f"</div>{content}</div>"
     )
-    return _page(body)
+    return _page(body, base=base)
 
 
-def page(engine: Engine, params: dict[str, str]) -> str:
+def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
     """Die Vollbild-Seite: Kennzahlen, Suchen mit Zustand, alle Treffer als Raster."""
+    _base.path = base
     sel = params.get("s") or ""
     names = [s.name for s in engine.searches]
     if sel not in names:
@@ -309,7 +376,7 @@ def page(engine: Engine, params: dict[str, str]) -> str:
         f"<div class=chips>{''.join(chips)}</div></div>{grid}</div>"
         "</div>"
     )
-    return _page(body, page=True, reload_ms=120_000)
+    return _page(body, page=True, reload_ms=120_000, base=base)
 
 
 def go(target_url: str | None) -> str:
