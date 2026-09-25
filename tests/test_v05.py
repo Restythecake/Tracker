@@ -107,3 +107,11 @@ def test_digest_once_per_day():
     assert e._maybe_digest(e.settings, force=True)
     assert client.sent[-1]["title"] == "Tracker – Tagesüberblick" and len(client.sent) == before + 1
     assert not e._maybe_digest(e.settings)  # heute schon gesendet
+
+
+def test_card_image_paths_are_nest_safe():
+    import re
+    from nest_plugin.widgets import image_path, key_from_image
+    for key in ("ebay:298703991859", "kleinanzeigen:3522300210", "vinted:10124793013"):
+        p = image_path(key)
+        assert re.fullmatch(r"/[A-Za-z0-9/._~+=-]+", p) and key_from_image(p[len("/img/"):]) == key

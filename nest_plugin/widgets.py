@@ -111,7 +111,8 @@ def latest(engine: Engine, size: str | None) -> dict[str, Any]:
         verdict = a.get("verdict")
         state = {"top": "ok", "gut": "ok", "teuer": "warn", "verdaechtig": "warn"}.get(verdict, "ok")
         items.append({"id": m.key + "@" + m.search, "title": _headline(m.listing),
-                      "meta": SHORT_VERDICT.get(verdict) or ago(m.first_seen), "state": state})
+                      "meta": SHORT_VERDICT.get(verdict) or ago(m.first_seen), "state": state,
+                      "url": m.listing.url})
     return {"kind": "list", "state": "ok", "title": "Neueste Treffer", "items": items}
 
 
@@ -195,6 +196,42 @@ def prices(engine: Engine, size: str | None) -> dict[str, Any]:
             "series": series}
 
 
+CARD_TONE = {"top": "ok", "gut": "ok", "fair": "info", "teuer": "warn", "verdaechtig": "error"}
+
+
+def image_path(key: str) -> str:
+    """Nest erlaubt in Asset-Pfaden nur [A-Za-z0-9/._-~+=] -- "ebay:123" -> "/img/ebay-123"."""
+    return "/img/" + key.replace(":", "-", 1)
+
+
+def key_from_image(path: str) -> str:
+    return path.replace("-", ":", 1)
+
+
+def offers(engine: Engine, size: str | None) -> dict[str, Any]:
+    """Native Kartenleiste (Nest-Widget-Art ``cards``): Bild, Preis, Urteil, Link."""
+    if not engine.searches:
+        return _no_searches()
+    matches = engine.recent_matches(limit=12, include_silent=True)
+    if not matches:
+        return {"kind": "cards", "state": "empty", "items": [],
+                "message": "Noch keine passenden Angebote – die Suchen laufen."}
+    items = []
+    for m in matches:
+        l = m.listing
+        a = l.assessment or {}
+        item = {"id": m.key + "@" + m.search, "title": a.get("summary") or l.title,
+                "subtitle": " · ".join(x for x in (l.source_label, l.location) if x),
+                "price": l.price_text, "meta": ago(m.first_seen), "url": l.url}
+        if l.image_url:
+            item["image"] = image_path(m.key)
+        if a.get("verdict"):
+            item["badge"] = SHORT_VERDICT.get(a["verdict"], a["verdict"])
+            item["badgeTone"] = CARD_TONE.get(a["verdict"], "info")
+        items.append(item)
+    return {"kind": "cards", "state": "ok", "items": items}
+
+
 def restock(engine: Engine, size: str | None) -> dict[str, Any]:
     """Shop-Verfügbarkeit der Zelda-Edition (und was sonst beobachtet wird)."""
     rows = engine.store.restock_rows()
@@ -231,4 +268,5 @@ WIDGETS = {
     "deals": deals,
     "prices": prices,
     "restock": restock,
+    "offers": offers,
 }

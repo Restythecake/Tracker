@@ -21,7 +21,7 @@ from nest_plugin.store import Store
 from nest_plugin.widgets import WIDGETS
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PAYLOAD_KINDS = {"stat", "list", "table", "chart", "progress", "status"}
+PAYLOAD_KINDS = {"stat", "list", "table", "chart", "progress", "status", "cards"}
 STATES = {"ok", "warn", "empty", "error", "loading"}
 
 
@@ -199,6 +199,15 @@ def _check_payload(p: dict):
         assert p["items"] and all(i.get("id") and i.get("title") for i in p["items"])
     if p["kind"] == "status" and state in ("ok", "warn"):
         assert p["label"] and all(c.get("label") and c.get("state", "ok") in STATES for c in p["checks"])
+    if p["kind"] == "cards" and state in ("ok", "warn"):
+        import re
+        for i in p["items"]:
+            assert i.get("id") and i.get("title")
+            assert i.get("url", "https://").startswith("https://")
+            if "image" in i:  # Nest: Pfad im Plugin, nur [A-Za-z0-9/._-~+=], nie eine URL
+                assert re.fullmatch(r"/[A-Za-z0-9/._~+=-]+", i["image"]), i["image"]
+    if p["kind"] in ("list",) and state in ("ok", "warn"):
+        assert all(i.get("url", "https://").startswith("https://") for i in p["items"])
     if p["kind"] == "stat" and state in ("ok", "warn"):
         assert p["label"] and isinstance(p["value"], (int, float))
     if p["kind"] == "table" and state in ("ok", "warn"):

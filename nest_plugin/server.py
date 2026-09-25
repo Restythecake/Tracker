@@ -170,7 +170,9 @@ def make_handler(engine: Engine, images: ImageCache):
                         return self._html(frame.page(engine, params))
                     return self._html(frame.widget(engine, params))
                 if path.startswith("/img/"):
-                    key = unquote(path[len("/img/"):])
+                    raw = unquote(path[len("/img/"):])
+                    # Neue Form "ebay-123" (Nest-Asset-Proxy), alte "ebay:123" (Galerie)
+                    key = raw if ":" in raw else raw.replace("-", ":", 1)
                     listing = engine.store.listing(key)
                     got = None
                     if listing and listing.image_url:

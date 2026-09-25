@@ -36,7 +36,12 @@ MANIFEST = {
         {
             "id": "overview", "kind": "stat", "name": "Neue Treffer", "title": "Tracker",
             "description": "Wie viele neue passende Angebote in den letzten 24 Stunden aufgetaucht sind.",
-            "sizes": ["1x1", "2x1"], "defaultSize": "2x1", "refreshSeconds": 60,
+            "sizes": ["1x1", "2x1"], "defaultSize": "2x1", "refreshSeconds": 60, "badge": True,
+        },
+        {
+            "id": "offers", "kind": "cards", "name": "Angebote (Karten)", "title": "Angebote",
+            "description": "Die passenden Angebote mit Bild, Preis und Urteil – ein Klick öffnet das Angebot.",
+            "sizes": ["4x1", "6x1", "4x2", "6x2"], "defaultSize": "6x2", "refreshSeconds": 120,
         },
         {
             "id": "latest", "kind": "list", "name": "Neueste Treffer", "title": "Neueste Treffer",
