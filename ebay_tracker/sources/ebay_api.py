@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+ITEM_URL = "https://api.ebay.com/buy/browse/v1/item/"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 
@@ -110,3 +111,44 @@ class EbayApiSource:
             shipping=shipping,
             location=", ".join(x for x in (location.get("postalCode"), location.get("country")) if x) or None,
         )
+
+    def load_details(self, listing: Listing) -> None:
+        """Item-Details über getItem nachladen: Zustand, Merkmale, Beschreibung, Verkäufer.
+
+        Die Suche (item_summary) liefert nur den Titel; Specs für bewertung:pc stehen
+        aber auf der Detailseite. item_id ist hier die legacy-ID (ohne |0-Suffix).
+        """
+        resp = self.session.get(
+            ITEM_URL + listing.item_id,
+            headers={
+                "Authorization": f"Bearer {self._get_token()}",
+                "X-EBAY-C-MARKETPLACE-ID": self.settings.marketplace,
+                "Accept-Language": "de-DE",
+            },
+            timeout=30,
+        )
+        if resp.status_code == 401:
+            self._token = None
+        if resp.status_code == 429:
+            raise SourceError("eBay-API Rate-Limit", blocked=True)
+        if resp.status_code != 200:
+            log.debug("eBay-Item %s nicht ladbar (%s)", listing.item_id, resp.status_code)
+            return
+        item = resp.json()
+        if cond := item.get("condition"):
+            listing.condition = cond
+            listing.is_new = cond.lower() in ("neu", "new", "brand new")
+        pairs = []
+        for aspect in item.get("localizedAspects") or []:
+            name = aspect.get("name", "")
+            value = " ".join(aspect.get("value") or [])
+            if name and value and name.lower() != "artikelzustand" and len(value) < 200:
+                pairs.append(f"{name}: {value}")
+        desc = item.get("shortDescription") or ""
+        if pairs or desc:
+            listing.description = "\n".join(pairs + ([desc] if desc else []))[:6000]
+        seller = item.get("seller") or {}
+        if feedback := seller.get("feedbackPercentage"):
+            listing.description = ((listing.description or "") + f"\nVerkäufer: {seller.get('username', '?')}"
+                                   f" ({feedback} % positiv, {seller.get('feedbackScore', '?')} Bewertungen)")[:6000]
+        listing.details_loaded = True

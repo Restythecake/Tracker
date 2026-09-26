@@ -83,3 +83,66 @@ def test_api_params_and_mapping():
     })
     assert listing.item_id == "315123456789" and listing.price == 899.0 and listing.shipping == 4.99
     assert listing.location == "10*, DE"
+
+
+def _api_source_with_token(monkeypatch):
+    """EbayApiSource mit gemocktem Token (kein echter OAuth-Call)."""
+    src = EbayApiSource(Settings(ebay_client_id="a", ebay_client_secret="b"))
+    src._token = "t"
+    src._token_expires = float("inf")
+    return src
+
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
+def test_api_details_mapping(monkeypatch):
+    src = _api_source_with_token(monkeypatch)
+    item = {
+        "condition": "Neu",
+        "localizedAspects": [
+            {"name": "Marke", "value": ["Lenovo"]},
+            {"name": "Artikelzustand", "value": ["Neu"]},
+            {"name": "Prozessortyp", "value": ["Intel Core i7-1265U"]},
+            {"name": "Riesig", "value": ["x" * 300]},
+        ],
+        "shortDescription": "Kurze Beschreibung",
+        "seller": {"username": "shopx", "feedbackPercentage": "99,4", "feedbackScore": 1234},
+    }
+    monkeypatch.setattr(src.session, "get", lambda *a, **kw: _FakeResp(item))
+    from ebay_tracker.models import Listing
+    l = Listing(item_id="315123456789", title="t", price=1, currency="EUR", url="u", source="ebay")
+    src.load_details(l)
+    assert l.condition == "Neu" and l.is_new and l.details_loaded
+    assert "Marke: Lenovo" in l.description
+    assert "Prozessortyp: Intel Core i7-1265U" in l.description and "Riesig" not in l.description
+    assert "shopx (99,4 % positiv" in l.description
+
+
+def test_api_details_no_seller_without_feedback(monkeypatch):
+    src = _api_source_with_token(monkeypatch)
+    monkeypatch.setattr(src.session, "get", lambda *a, **kw: _FakeResp({"condition": "Gebraucht"}))
+    from ebay_tracker.models import Listing
+    l = Listing(item_id="1", title="t", price=1, currency="EUR", url="u", source="ebay")
+    src.load_details(l)
+    assert l.condition == "Gebraucht" and not l.is_new and l.description is None
+
+
+def test_api_details_rate_limit_blocked(monkeypatch):
+    src = _api_source_with_token(monkeypatch)
+    monkeypatch.setattr(src.session, "get", lambda *a, **kw: _FakeResp({}, status=429))
+    from ebay_tracker.models import Listing
+    from ebay_tracker.sources.base import SourceError
+    l = Listing(item_id="1", title="t", price=1, currency="EUR", url="u", source="ebay")
+    try:
+        src.load_details(l)
+        assert False, "sollte SourceError werfen"
+    except SourceError as exc:
+        assert getattr(exc, "blocked", False)
