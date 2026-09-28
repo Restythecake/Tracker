@@ -482,6 +482,14 @@ class Engine:
         elif row is not None:
             # Quelle entfernt: nur deren Treffer weg; kommt sie zurück, liest sie still neu ein.
             self.store.drop_source_matches(search.name, wanted)
+        if search.evaluate:
+            # Bestand mit den aktuellen Regeln nachprüfen: sonst hängt ein Laptop, den eine
+            # ältere Regel als RAM-Deal durchgelassen hat, so lange in "Beste Deals", bis
+            # er zufällig wieder in den Suchergebnissen auftaucht.
+            stale = [m.key for m in self.store.recent_matches(search=search.name, include_silent=True, limit=2000)
+                     if (q := self._quick(search, m.listing)) is not None and not q.ok]
+            if stale and (n := self.store.hide_matches(search.name, stale)):
+                log.info("[%s] %d gespeicherte Treffer fallen nach neuen Regeln raus", search.name, n)
         listings, errors = source.search_detailed(search)
         answered = {name for name in search.sources if name not in errors}
         error = None

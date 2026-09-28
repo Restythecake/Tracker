@@ -130,3 +130,16 @@ def test_ram_mode_rejects_computers_and_swaps(title):
 
 def test_ssd_after_ddr_is_not_ram():
     assert extract_specs("Laptop 8GB DDR4 128GB SSD").ram_gb == 8
+
+
+def test_live_false_deals_from_2026_09_28_are_rejected():
+    from ebay_tracker.hardware import assess_gpu, assess_ram
+    for title in ("Asus Vivobook E410KA 128GB eMMC Intel N4500 4GB RAM DDR4 Pink Grade C",
+                  "X99 Gaming Motherboard Für LGA 2011 3 Computer Motherboard 4 Kanal DDR4 128GB M",
+                  'Dell Precision 7560 64GB DDR4 Nvidia RTXA4000 15,6" TOP ZUSTAND'):
+        assert not assess_ram(title, 100, min_gb=64).ok, title
+    for title in ("Ankauf RTX 3090‼️", "NVIDIA NVLink Bridge 3-Slot GPU Interconnect for RTX 3090 A5000",
+                  "MSI GeForce RTX 3090 SUPRIM X 24G - meist funktionsfähig, frisch neu verklebt, kleiner VRAM"):
+        assert not assess_gpu(title, 400).ok, title
+    assert assess_ram("Corsair Vengeance RGB PRO DDR4 64GB (4x16GB) 3200MHz", 90, min_gb=64).verdict == "top"
+    assert assess_gpu("Rx 7900 XTX Spectral White Hellhound 24GB", 600).ok

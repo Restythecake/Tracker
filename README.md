@@ -59,6 +59,9 @@ Container schreiben (`apply-token`). Danach:
 - **Widgets** auf dem Desktop: *Neue Treffer* (stat), *Neueste Treffer* (list), *Suchen* (status),
   *Angebote* (table), *Preisverlauf* (chart) und *Galerie* (iframe mit Bildern; „Alles ansehen ↗“
   öffnet die Vollbild-Seite).
+- **Vollbild-Seite** (`nest_plugin/frame.py`, ab 0.8 im Nest-Look): KPI-Karten, „Beste Deals“ als
+  große Karten, Suchen mit Preis-Sparkline, Kachelraster aller Treffer, Quellen-Statistik. Folgt dem
+  Nest-Theme (hell/dunkel), ohne Build-Schritt – reines serverseitiges HTML/CSS.
 - **Aktionen** auf der Plugin-Seite: *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
 - **Push**: jeder neue Treffer einzeln (Tippen öffnet das Angebot), ab `max_notifications` pro Lauf
   eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein

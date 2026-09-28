@@ -95,7 +95,12 @@ BAD_PSU = ("xilence", "lc-power", "lc power", "inter-tech", "intertech", "aeroco
 REJECT_TERMS = {
     r"\bdefekt": "defekt", r"\bbastler": "Bastlerware", r"\bgesucht?\b|\bsuche\b": "Gesuch",
     r"\btausch": "Tausch", r"ohne\s+(grafikkarte|gpu|graka)": "ohne Grafikkarte",
-    r"\b(laptop|notebook)\b": "Laptop", r"\bmining|\bminer\b": "Mining-Rig",
+    r"\b(laptop|notebook|vivobook|zenbook|ideapad|chromebook|macbook)\b": "Laptop", r"\bmining|\bminer\b": "Mining-Rig",
+    # "Ankauf RTX 3090" ist ein Händler, der kauft -- kein Angebot (live 28.09.)
+    r"\bankauf\b|\bkaufe\b|\bwir\s+kaufen": "Ankauf-Gesuch",
+    # "meist funktionsfähig, kleiner VRAM" lief als Top-Deal (live 28.09.)
+    r"(?:meist|teilweise|nicht)\s+funktionsf|artefakt|ungetestet|f(?:ü|ue)r\s+teile|for\s+parts|"
+    r"vram[\s-]*(?:fehler|defekt|problem)|kleiner\s+vram": "nicht voll funktionsfähig",
     r"\bmiete|\bmieten\b|\bvermiet": "Miete", r"nur\s+(gehäuse|gehaeuse|tower|mainboard|netzteil)": "nur Einzelteil",
     r"\bbarebone": "Barebone",
 }
@@ -437,8 +442,11 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
         if re.search(pattern, t):
             return Assessment(False, "ungeeignet", label, None, None, specs)
     # Ganze Rechner mit viel RAM gehören in die PC-Suche, nicht hierher
+    # Laptops/Boards nennen oft nur die Marke ("Vivobook … 128GB eMMC"); die Speicherangabe ist dann Flash.
     if specs.cpu or re.search(r"\b(?:mini\s*pc|nuc|thinkpad|latitude|elitebook|macbook|imac|mac\s*pro|"
-                              r"workstation|tower|desktop\s*pc|all.in.one|windows\s*1[01]|ssd)\b", t):
+                              r"workstation|tower|desktop\s*pc|all.in.one|windows\s*1[01]|ssd|emmc|"
+                              r"pavilion|probook|inspiron|surface|celeron|n4500|precision|motherboard|mainboard|"
+                              r"zoll|display)\b|\b\d{2}(?:[.,]\d)?\s*(?:\"|”|'')", t):
         return Assessment(False, "ungeeignet", "ganzer Rechner, kein RAM-Kit", None, None, specs)
     if specs.ram_gb is None or specs.ram_gb < min_gb:
         return Assessment(False, "ungeeignet", f"RAM-Groesse nicht erkennbar oder unter {min_gb} GB",
@@ -480,7 +488,7 @@ def assess_ram(title: str, price: float | None, *, description: str = "",
     else:
         verdict = "teuer"
     diff = int(round((ratio - 1) * 100))
-    (pros if diff <= 0 else cons).append(f"{abs(diff)} % {'unter' if diff <= 0 else 'ueber'} Marktwert (~{fair} EUR)")
+    (pros if diff <= 0 else cons).append(f"{abs(diff)} % {'unter' if diff <= 0 else 'über'} Marktwert (~{fair} €)")
     a = Assessment(True, verdict, None, fair, round(ratio, 3), specs, pros, cons)
     a.market = market_note(price, market)
     a.summary = summary
@@ -503,7 +511,7 @@ def assess_gpu(title: str, price: float | None, *, description: str = "",
                  r"heatsink|backplate\b|nur\s*(?:k(?:ü|ue)hler|box|karton)|wasserk(?:ü|ue)hl|waterblock|"
                  r"water\s*block|eisblock|\bblock\b|k(?:ü|ue)hler\b|cooler\b|cooling|dissipatore|scatola|"
                  r"l(?:ü|ue)fter|fans?\b|shroud|halterung|riser|stütze|support\s*bracket|\bovp\s*only|leerkarton|"
-                 r"(?:ohne|nur)\s*(?:karte|gpu)", t):
+                 r"(?:ohne|nur)\s*(?:karte|gpu)|nv-?link|\bsli\b|bridge|br(?:ü|ue)cke|interconnect|adapter|kabel\b", t):
         return Assessment(False, "ungeeignet", "keine einzelne Grafikkarte", None, None, specs)
     if specs.gpu is None:
         return Assessment(False, "ungeeignet", "keine Grafikkarte erkennbar", None, None, specs)

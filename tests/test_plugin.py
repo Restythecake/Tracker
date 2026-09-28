@@ -382,3 +382,20 @@ def test_pre_07_signature_is_migrated_not_reset(rig):
     engine.run_once()
     assert [s["url"].rsplit("/", 1)[1] for s in client.sent] == ["2"]
     assert engine.store.search_state(search.name)["signature"] == signature(search, settings)
+
+
+def test_stored_matches_are_rechecked_with_current_rules(rig):
+    engine, ebay, ka, client = rig
+    engine.update_settings({"searches": ["ddr4 64gb bewertung:ram ram:64 @ebay"]}, trigger=False)
+    good = Listing(item_id="1", title="Corsair DDR4 64GB (2x32GB) 3200", price=90, currency="EUR",
+                   url="https://www.ebay.de/itm/1", source="ebay")
+    ebay.items = [good]
+    engine.run_once()
+    laptop = Listing(item_id="2", title="Vivobook 64GB DDR4", price=90, currency="EUR",
+                     url="https://www.ebay.de/itm/2", source="ebay")
+    engine.store.upsert_listing(laptop)
+    engine.store.add_match(engine.searches[0].name, laptop, silent=0)  # von einer älteren Regel durchgelassen
+    engine.store.commit()
+    engine.run_once()
+    keys = {m.key for m in engine.store.recent_matches(limit=10, include_silent=True)}
+    assert keys == {"ebay:1"}
