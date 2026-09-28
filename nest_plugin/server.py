@@ -180,7 +180,13 @@ def make_handler(engine: Engine, images: ImageCache):
                     # Frame liegt; die Oberfläche präfixiert alle relativen
                     # URLs damit. Auf der Subdomain fehlt der Header.
                     base = frame.frame_base(self.headers)
-                    if params.get("layout") == "page":
+                    # Die Launcher-Kachel öffnet die Frame-Adresse ohne
+                    # ?layout als eigenen Tab – dann die Vollseite, nicht das
+                    # kleine Widget. Im Widget-iframe schickt der Browser
+                    # Sec-Fetch-Dest: iframe.
+                    layout = params.get("layout") or (
+                        "page" if self.headers.get("Sec-Fetch-Dest") == "document" else "widget")
+                    if layout == "page":
                         return self._html(frame.page(engine, params, base=base))
                     return self._html(frame.widget(engine, params, base=base))
                 if path.startswith("/img/"):

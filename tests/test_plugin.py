@@ -269,6 +269,13 @@ def test_http_contract(rig, tmp_path):
         assert post("/nest/v1/actions/test-notify", {})["ok"] is True
         status, html = get("/")
         assert status == 200 and "Tracker" in html
+        # Launcher-Kachel öffnet "/" als eigenen Tab -> Vollseite statt Widget
+        widget_html = html
+        req = urllib.request.Request(base + "/", headers={"Sec-Fetch-Dest": "document"})
+        with urllib.request.urlopen(req) as r:
+            page_html = r.read().decode()
+        assert "<footer>" in page_html and "<footer>" not in widget_html
+        assert "?layout=page" in widget_html  # Widget verlinkt auf die Vollseite
         status, html = get("/go/ebay%3A1")
         assert "https://www.ebay.de/itm/1" in html
         assert "Angebot nicht gefunden" in get("/go/nope")[1]
