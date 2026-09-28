@@ -35,7 +35,8 @@ HEADERS = {
 }
 
 _ITEM_ID = re.compile(r"/itm/(?:[^/?#]+/)?(\d{9,15})")
-_NUMBER = re.compile(r"\d{1,3}(?:[.,  ]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?")
+# (?!\d): ohne den Anker las die erste Alternative "1234.56" als 123.
+_NUMBER = re.compile(r"\d{1,3}(?:[.,  ]\d{3})*(?:[.,]\d{1,2})?(?!\d)|\d+(?:[.,]\d{1,2})?")
 _TITLE_PREFIXES = ("Neues Angebot", "New listing", "Neu eingestellt")
 
 

@@ -299,6 +299,12 @@ class Store:
         """Speichert den Zustand; True, wenn er sich geändert hat."""
         with self._lock:
             row = self.conn.execute("SELECT available, price, note FROM restock WHERE shop = ?", (shop,)).fetchone()
+            if available is None and row is not None and row["available"] is not None:
+                # "Unklar" (Seite nicht lesbar) ist kein Zustandswechsel: sonst
+                # flattert ein Shop None↔verfügbar und meldet bei jedem Lauf neu.
+                self.conn.execute("UPDATE restock SET note = ? WHERE shop = ?", (note, shop))
+                self.conn.commit()
+                return False
             changed = row is None or row["available"] != (None if available is None else int(available))
             self.conn.execute(
                 """INSERT INTO restock (shop, url, name, price, available, changed_at, note)

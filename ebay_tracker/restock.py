@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .sources.http import REQUEST_ERRORS, new_session
+from .sources.scraper import parse_price
 
 log = logging.getLogger(__name__)
 
@@ -56,14 +57,29 @@ class Offer:
     available: bool | None  # None = unklar, Seite nicht lesbar
     note: str | None = None
 
+    def __post_init__(self) -> None:
+        # ld+json liefert den Preis mal als Zahl, mal als String ("18.90", Otto) --
+        # alles dahinter rechnet mit float.
+        self.price = as_price(self.price)
+
     @property
     def price_note(self) -> str:
-        if self.price is None:
+        price = as_price(self.price)  # auch nach nachträglichem Setzen
+        if price is None:
             return "Preis unbekannt"
-        text = f"{self.price:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-        if self.price <= UVP_SWITCH2_ZELDA:
+        text = f"{price:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+        if price <= UVP_SWITCH2_ZELDA:
             return f"{text} (≤ UVP)"
-        return f"{text} (+{int(round((self.price / UVP_SWITCH2_ZELDA - 1) * 100))}% über UVP)"
+        return f"{text} (+{int(round((price / UVP_SWITCH2_ZELDA - 1) * 100))}% über UVP)"
+
+
+def as_price(value: Any) -> float | None:
+    """519.99 / "519.99" / "519,99" / "1.234,56 €" -> float; Unlesbares -> None."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return parse_price(str(value))
 
 
 @dataclass
@@ -146,17 +162,21 @@ def check_otto(session, search_url: str | None = None) -> Offer:
     for product in _ld_products(html):
         name = str(product.get("name", ""))
         low = name.lower()
-        # Das Sondermodell: Konsole mit "zelda" im Namen, kein Bundle, kein Spiel
-        if "zelda" not in low or "konsole" not in low and "edition" not in low:
+        # Das Sondermodell: Konsole mit "zelda" im Namen, kein Bundle, kein Spiel.
+        # "switch 2" ist Pflicht: am 28.09.2026 matchte sonst ein Zelda-T-Shirt
+        # ("… zelda boy switch konsole …", 18,90 €) als "verfügbar".
+        if "zelda" not in low or "switch 2" not in low or "konsole" not in low and "edition" not in low:
             continue
         if "softwarekarte" in low or "bundle" in low:
             continue
         offer = _first_offer(product)
         availability = str(offer.get("availability", ""))
-        if not availability:
+        price = as_price(offer.get("price"))
+        # Zubehör unter halber UVP ist nie die Konsole
+        if not availability or price is not None and price < UVP_SWITCH2_ZELDA / 2:
             continue
         offer_obj = Offer(shop="Otto", name=name, url="https://www.otto.de" + str(product.get("url", "")),
-                          price=offer.get("price"), available="InStock" in availability)
+                          price=price, available="InStock" in availability)
         if best is None or offer_obj.available:
             best = offer_obj
     return best or Offer(shop="Otto", name="Sondermodell in der Suche nicht gelistet", url=search_url,

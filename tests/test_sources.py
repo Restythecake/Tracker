@@ -38,6 +38,8 @@ def test_parse_price():
     assert parse_price("EUR 1.234,56") == 1234.56
     assert parse_price("$1,234.56") == 1234.56
     assert parse_price("EUR 10,00 bis EUR 20,00") == 10.0
+    assert parse_price("1234.56") == 1234.56  # ohne Tausenderpunkt (ld+json) las er früher 123
+    assert parse_price("1234") == 1234.0
     assert parse_price("EUR 899") == 899.0
     assert parse_price("") is None
 

@@ -80,3 +80,45 @@ def test_engine_restock_notify_on_change(tmp_path):
     assert len(client.sent) == 1  # wieder weg -> keine Meldung
     engine._check_restock(engine.settings, session=FakeShopSession({"https://mm/x.html": MM_IN}))
     assert len(client.sent) == 2  # zweiter Restock -> wieder Meldung
+
+
+# Live-Befund 28.09.2026: Otto liefert den ld+json-Preis als String und die
+# Suche enthält ein Zelda-T-Shirt mit "switch konsole" im Namen. Folge waren
+# 87 Abstürze in _restock_notify (f"{str:,.2f}") pro Tag.
+OTTO_SHIRT = '''<script type="application/ld+json">{"@type":"Product",
+"name":"style3 T-Shirt Adventure Link game gamer zelda boy switch konsole breath wild",
+"offers":{"price":"18.90","availability":"https://schema.org/InStock"},"url":"/p/shirt/"}</script>'''
+
+
+def test_price_as_string_is_normalized():
+    o = Offer(shop="Otto", name="n", url="u", price="519.99", available=True)
+    assert o.price == 519.99 and "519,99" in o.price_note
+    o.price = "1.234,50"  # nachträglich gesetzt: price_note bleibt robust
+    assert o.price_note.startswith("1.234,50 €")
+    assert Offer(shop="x", name="n", url="u", price="kaputt", available=None).price_note == "Preis unbekannt"
+
+
+def test_otto_ignores_merch_and_string_price():
+    page = OTTO_SHIRT + OTTO_IN.replace("519.99", '"549.00"')
+    o = check_otto(FakeShopSession({"https://otto/suche/": page}), "https://otto/suche/")
+    assert o.url.endswith("/p/x/") and o.price == 549.0
+    only_shirt = check_otto(FakeShopSession({"https://otto/suche/": OTTO_SHIRT}), "https://otto/suche/")
+    assert only_shirt.available is None
+
+
+def test_engine_restock_unclear_does_not_flap(tmp_path):
+    from nest_plugin.engine import Engine
+    from nest_plugin.store import Store
+    from ebay_tracker.sources import MultiSource
+    client = FakeClient()
+    engine = Engine(Store(":memory:"), client, source_factory=lambda st: MultiSource({}), pause=lambda s: None)
+    engine.update_settings({"searches": [], "restock_urls": ['{"kind":"otto","name":"Otto","url":"https://otto/suche/"}']},
+                           trigger=False)
+    stock = FakeShopSession({"https://otto/suche/": OTTO_IN.replace("519.99", '"519.99"')})
+    unclear = FakeShopSession({"https://otto/suche/": "<html>Bot-Schutz</html>"})
+    engine._check_restock(engine.settings, session=stock)
+    assert len(client.sent) == 1 and "519,99" in client.sent[0]["body"]
+    for _ in range(3):  # None↔verfügbar im Wechsel darf nicht jedes Mal melden
+        engine._check_restock(engine.settings, session=unclear)
+        engine._check_restock(engine.settings, session=stock)
+    assert len(client.sent) == 1
