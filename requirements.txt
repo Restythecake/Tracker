@@ -2,3 +2,5 @@ requests>=2.28
 PyYAML>=6.0
 beautifulsoup4>=4.11
 curl_cffi>=0.7
+# Nur der Parser (lxml & Co., kein Browser); Browser-Fetcher: siehe Dockerfile
+scrapling>=0.4.15

@@ -148,3 +148,19 @@ def test_api_details_rate_limit_blocked(monkeypatch):
         assert False, "sollte SourceError werfen"
     except SourceError as exc:
         assert getattr(exc, "blocked", False)
+
+
+def test_combine_queries_keeps_meaning_and_saves_requests():
+    from ebay_tracker.sources.scraper import combine_queries as c
+    assert c(["gaming pc", "pc rtx"]) == ["pc (gaming,rtx)"]
+    assert c(["ddr4 64gb", "ddr5 64gb"]) == ["64gb (ddr4,ddr5)"]
+    assert c(["ddr4 96gb", "ddr4 128gb", "ddr5 96gb", "ddr5 128gb"]) == ["(128gb,96gb) (ddr4,ddr5)"]
+    assert c(["switch 2 zelda edition", "switch 2 zelda konsole"]) == ["switch 2 zelda (edition,konsole)"]
+    assert c(["rtx 3090", "rx 7900 xtx"]) == ['("rtx 3090","rx 7900 xtx")']
+    # kein vollständiges Kreuzprodukt / keine Modellnamen: lieber einzeln (alte Bedeutung)
+    assert c(["ddr4 96gb", "ddr5 128gb"]) == ["ddr4 96gb", "ddr5 128gb"]
+    assert c(["lego", "playmobil set"]) == ["lego", "playmobil set"]
+    assert c(["thinkpad t14"]) == ["thinkpad t14"]
+    assert c(['"exakt" a', "b"]) == ['"exakt" a', "b"]  # eigene eBay-Syntax bleibt unangetastet
+    many = [f"rtx {n}" for n in range(3000, 3012)]
+    assert len(c(many)) == 2  # höchstens 10 Alternativen je Anfrage

@@ -20,7 +20,8 @@ MARKETPLACES = {
     "EBAY_NL": ("www.ebay.nl", "EUR"),
 }
 
-KNOWN_SOURCES = ("ebay", "kleinanzeigen", "vinted")
+KNOWN_SOURCES = ("ebay", "kleinanzeigen", "vinted", "mydealz")
+FETCH_MODES = ("auto", "http", "stealth")
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -76,6 +77,14 @@ class Settings:
     # Default-Umkreis für Kleinanzeigen, wenn eine Suche keinen eigenen nennt
     kleinanzeigen_plz: str | None = None
     kleinanzeigen_radius_km: int | None = None
+    # Seitenabruf (sources/fetch.py): auto = HTTP, bei Sperre Browser | http | stealth.
+    # ``fetchers`` überschreibt das je Quelle, z. B. {"ebay": "stealth"}.
+    fetcher: str = "auto"
+    fetchers: dict[str, str] = field(default_factory=dict)
+
+    def fetcher_for(self, source: str) -> str:
+        mode = self.fetchers.get(source) or self.fetcher
+        return mode if mode in FETCH_MODES else "auto"
 
     @property
     def domain(self) -> str:
@@ -179,11 +188,16 @@ def load_config(path: str | Path) -> Config:
         kleinanzeigen_plz=str(raw_settings["kleinanzeigen_plz"]) if raw_settings.get("kleinanzeigen_plz") else None,
         kleinanzeigen_radius_km=int(raw_settings["kleinanzeigen_radius_km"])
         if raw_settings.get("kleinanzeigen_radius_km") else None,
+        fetcher=str(raw_settings.get("fetcher", "auto")).lower(),
+        fetchers={str(k): str(v).lower() for k, v in (raw_settings.get("fetchers") or {}).items()},
     )
     if settings.marketplace not in MARKETPLACES:
         raise ConfigError(f"Unbekannter Marktplatz '{settings.marketplace}'. Erlaubt: {', '.join(MARKETPLACES)}")
     if settings.source not in {"auto", "api", "scraper"}:
         raise ConfigError("settings.source muss auto/api/scraper sein")
+    bad = [m for m in (settings.fetcher, *settings.fetchers.values()) if m not in FETCH_MODES]
+    if bad:
+        raise ConfigError(f"settings.fetcher muss {'/'.join(FETCH_MODES)} sein, nicht '{bad[0]}'")
     if settings.interval_minutes < 1:
         raise ConfigError("settings.interval_minutes muss mindestens 1 sein (sonst blockt eBay)")
 

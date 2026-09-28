@@ -14,8 +14,10 @@ from bs4 import BeautifulSoup, Tag
 
 from ..config import Search, Settings
 from ..models import Listing
+from . import parsing
 from .base import SourceError
-from .http import HAS_CFFI, REQUEST_ERRORS, new_session
+from .fetch import Fetcher
+from .http import HAS_CFFI, REQUEST_ERRORS
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +81,74 @@ def _clean_title(title: str) -> str:
     return title.replace("Wird in neuem Fenster oder Tab geöffnet", "").strip(" -|")
 
 
+def _shipping(text: str) -> float | None:
+    if re.search(r"kostenlos|gratis|free", text, re.IGNORECASE):
+        return 0.0
+    return parse_price(text)
+
+
+_AUCTION = re.compile(r"\bGebote?\b|\bbids?\b", re.IGNORECASE)
+_CARD_CSS = "ul.srp-results > li.s-card, ul.srp-results > li.s-item"
+
+
 def parse_results(html: str, currency: str) -> list[Listing]:
+    """Trefferkarten lesen: mit Scrapling (selbstheilend), ohne per BeautifulSoup.
+
+    Findet Scrapling gar keine Karte -- auch nicht per Fingerabdruck --, bleibt
+    als letzter Versuch der alte Weg über jeden ``/itm/``-Link der Seite."""
+    page = parsing.page(html, "https://www.ebay.de")
+    if page is None:
+        return _parse_results_bs4(html, currency)
+    cards, _ = parsing.cards(page, _CARD_CSS, "ebay-card", may_heal="srp-results" in html)
+    listings: dict[str, Listing] = {}
+    for card in cards:
+        link = card.css('a[href*="/itm/"]').first
+        match = _ITEM_ID.search(link.attrib.get("href", "")) if link is not None else None
+        if not match:
+            continue
+        item_id = match.group(1)
+        if item_id in listings or item_id.startswith("123456"):  # Platzhalter 'Shop on eBay'
+            continue
+        title_el = _first(card, '[class*="s-card__title"]', '[class*="s-item__title"]') or link
+        title = parsing.text(title_el)
+        # 'Neues Angebot'-Badge steckt oft in einem eigenen span
+        for badge in title_el.css(".LIGHT_HIGHLIGHT, .s-card__new-listing"):
+            title = title.replace(parsing.text(badge), "", 1)
+        title = _clean_title(title.strip())
+        if not title or title.lower().startswith("shop on ebay"):
+            continue
+        shipping_el = _first(card, '[class*="s-item__shipping"]', '[class*="s-item__logisticsCost"]')
+        shipping_text = parsing.text(shipping_el)
+        if shipping_el is None:
+            shipping_text = next((parsing.text(el) for el in card.css("span, div")
+                                  if "Versand" in parsing.text(el) and "EUR" in parsing.text(el)), "")
+        img = card.css("img").first
+        listings[item_id] = Listing(
+            item_id=item_id,
+            title=title,
+            price=parse_price(parsing.text(_first(card, '[class*="s-card__price"]', '[class*="s-item__price"]'))),
+            currency=currency,
+            url=f"https://{_domain_from_href(link.attrib.get('href', ''))}/itm/{item_id}",
+            image_url=(img.attrib.get("src") or img.attrib.get("data-src")) if img is not None else None,
+            buying_options=["AUCTION"] if _AUCTION.search(parsing.text(card)) else ["FIXED_PRICE"],
+            shipping=_shipping(shipping_text),
+            source="ebay",
+        )
+    if not cards:
+        return _parse_results_bs4(html, currency)
+    return list(listings.values())
+
+
+def _first(card, *selectors: str):
+    for css in selectors:
+        el = card.css(css).first
+        if el is not None:
+            return el
+    return None
+
+
+def _parse_results_bs4(html: str, currency: str) -> list[Listing]:
+    """Fallback ohne scrapling (schlankes Image) und für Seiten ohne erkennbare Karten."""
     soup = BeautifulSoup(html, "html.parser")
     results_root = soup.select_one("ul.srp-results") or soup
     listings: dict[str, Listing] = {}
@@ -111,13 +180,8 @@ def parse_results(html: str, currency: str) -> list[Listing]:
                 (_text(el) for el in card.find_all(["span", "div"]) if "Versand" in _text(el) and "EUR" in _text(el)),
                 "",
             )
-        if re.search(r"kostenlos|gratis|free", shipping_text, re.IGNORECASE):
-            shipping = 0.0
-        else:
-            shipping = parse_price(shipping_text)
-
-        card_text = _text(card)
-        is_auction = bool(re.search(r"\bGebote?\b|\bbids?\b", card_text, re.IGNORECASE))
+        shipping = _shipping(shipping_text)
+        is_auction = bool(_AUCTION.search(_text(card)))
         img = card.find("img")
 
         listings[item_id] = Listing(
@@ -146,14 +210,16 @@ class EbayScraperSource:
     def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
         if session is not None:  # Tests reichen eine Fake-Session rein
-            self.session = session
-            self.session.headers.update(HEADERS)
-            self._warmed_up = True
-        else:
-            self.session = new_session()
-            # Mit curl_cffi passt der Fingerprint bereits; der Startseitenbesuch
-            # kostet nur eine weitere Anfrage, die selbst 403 bekommen kann.
-            self._warmed_up = HAS_CFFI
+            session.headers.update(HEADERS)
+        self.fetcher = Fetcher("ebay", "eBay", mode=settings.fetcher_for("ebay"), session=session,
+                               accept_language=HEADERS["Accept-Language"])
+        # Mit curl_cffi passt der Fingerprint bereits; der Startseitenbesuch
+        # kostet nur eine weitere Anfrage, die selbst 403 bekommen kann.
+        self._warmed_up = session is not None or HAS_CFFI
+
+    @property
+    def session(self):
+        return self.fetcher.session
 
     def _warm_up(self) -> None:
         """Startseite einmal besuchen, damit eBay die Session-Cookies setzt (nur requests-Fallback)."""
@@ -190,34 +256,23 @@ class EbayScraperSource:
 
     def search(self, search: Search) -> list[Listing]:
         results: dict[str, Listing] = {}
-        for i, query in enumerate(search.all_queries):
+        for i, query in enumerate(combine_queries(search.all_queries)):
             if i:
                 time.sleep(2.5)
             for listing in self._search_one(search, query):
                 results.setdefault(listing.item_id, listing)
         return list(results.values())
 
-    def _get(self, url: str, **kwargs):
+    def _get(self, url: str, params: dict | None = None) -> str:
+        """Seite holen (bei Sperre per Browser, siehe fetch.py) und als Text liefern."""
         self._warm_up()
-        try:
-            resp = self.session.get(url, timeout=30, **kwargs)
-        except REQUEST_ERRORS as exc:
-            raise SourceError(f"eBay nicht erreichbar: {exc.__class__.__name__}") from exc
-        if resp.status_code in (403, 429):
-            # Neue Session für den nächsten Versuch; jetzt nicht nachhaken.
-            self.session = new_session() if not isinstance(self.session, requests.Session) or HAS_CFFI \
-                else self.session
-            self._warmed_up = HAS_CFFI
-            raise SourceError(f"eBay blockt die Anfrage ({resp.status_code})", blocked=True)
-        if "captcha" in str(resp.url).lower() or "splashui/challenge" in str(resp.url):
-            raise SourceError("eBay zeigt ein Captcha", blocked=True)
-        if resp.status_code != 200:
-            raise SourceError(f"eBay-Suche fehlgeschlagen ({resp.status_code})")
-        return resp
+        page = self.fetcher.get(url, params=params)
+        if page.status != 200:
+            raise SourceError(f"eBay-Suche fehlgeschlagen ({page.status})")
+        return page.text
 
     def _search_one(self, search: Search, query: str) -> list[Listing]:
-        resp = self._get(f"https://{self.settings.domain}/sch/i.html", params=self.build_params(search, query))
-        html = resp.content.decode("utf-8", errors="replace")
+        html = self._get(f"https://{self.settings.domain}/sch/i.html", params=self.build_params(search, query))
         listings = parse_results(html, self.settings.currency)
         if not listings and "srp-results" not in html:
             log.warning("Keine Ergebnisse gefunden – evtl. hat eBay das Seitenlayout geändert")
@@ -225,8 +280,7 @@ class EbayScraperSource:
 
     def load_details(self, listing: Listing) -> None:
         """Artikelmerkmale und Verkäuferbeschreibung (liegt in einem iframe auf itm.ebaydesc.com)."""
-        resp = self._get(listing.url)
-        desc_url = parse_details(resp.content.decode("utf-8", errors="replace"), listing)
+        desc_url = parse_details(self._get(listing.url), listing)
         if desc_url:
             try:
                 time.sleep(1)
@@ -257,3 +311,66 @@ def parse_details(html: str, listing: Listing) -> str | None:
     frame = soup.select_one("iframe#desc_ifr")
     src = frame.get("src") if frame else None
     return src if src and src.startswith("https://itm.ebaydesc.com/") else None
+
+
+# ------------------------------------------------------------ ODER-Suchen
+MAX_OR_TERMS = 10
+_MODEL_NUMBER = re.compile(r"(?<!\S)\d{3,5}(?!\S)")  # "3090", "7900" -- nicht "96gb", "ddr4"
+
+
+def combine_queries(queries: list[str]) -> list[str]:
+    """Fasst Alternativ-Suchen (``a | b | c``) zu möglichst wenigen eBay-Anfragen zusammen.
+
+    Warum: Jede Alternative war eine eigene Anfrage -- mit allen Suchen ~20 alle
+    10 Minuten. Genau diese Menge hat Akamai am 27./28.09. zu 39 Sperren am Tag
+    getrieben; dagegen hilft auch kein getarnter Browser.
+
+    eBay versteht ``wort (a,b)`` = "wort und (a oder b)", Wörter in beliebiger
+    Reihenfolge -- also exakt die alte Bedeutung, wenn sich die Suchen so zerlegen:
+
+    * gemeinsame Wörter + je genau ein anderes Wort: ``pc (gaming,rtx)``
+    * gemeinsame Wörter + vollständiges Kreuzprodukt zweier Wortgruppen:
+      ``(ddr4,ddr5) (96gb,128gb)``
+    * Modellnamen (jede Alternative hat eine freistehende Modellnummer wie
+      3090): Phrasen-ODER
+      ``("rtx 3090","rx 7900 xtx")`` -- live geprüft, 60/60 passende Treffer.
+
+    Alles andere bleibt bei einer Anfrage je Alternative (sicher, nur teurer).
+    """
+    queries = [q.strip() for q in queries if q.strip()]
+    if len(queries) <= 1:
+        return queries
+    if any(ch in q for q in queries for ch in '()",'):  # schon eBay-Syntax: nicht anfassen
+        return queries
+    out: list[str] = []
+    for start in range(0, len(queries), MAX_OR_TERMS):
+        batch = queries[start:start + MAX_OR_TERMS]
+        out.append(_combine(batch) if len(batch) > 1 else batch[0])
+    if any(q is None for q in out):
+        return queries
+    return out  # type: ignore[return-value]
+
+
+def _combine(batch: list[str]) -> str | None:
+    words = [q.lower().split() for q in batch]
+    sets = [frozenset(w) for w in words]
+    if any(len(ws) != len(set(ws)) for ws in words):  # doppelte Wörter: lieber nicht
+        return None
+    common = frozenset.intersection(*sets)
+    common_ordered = [w for w in words[0] if w in common]
+    rest = [s - common for s in sets]
+    prefix = " ".join(common_ordered)
+    if all(len(r) == 1 for r in rest) and len(set(rest)) == len(rest):
+        group = ",".join(next(iter(r)) for r in rest)
+        return f"{prefix} ({group})".strip()
+    if all(len(r) == 2 for r in rest):
+        x, y = sorted(rest[0])
+        a = {t for r in rest if y in r for t in r if t != y}
+        b = {t for r in rest if x in r for t in r if t != x}
+        if not (a & b) and {frozenset((i, j)) for i in a for j in b} == set(rest) and len(rest) == len(a) * len(b):
+            ga = ",".join(sorted(a))
+            gb = ",".join(sorted(b))
+            return f"{prefix} ({ga}) ({gb})".strip()
+    if all(_MODEL_NUMBER.search(q) for q in batch):
+        return "(" + ",".join(f'"{q.lower()}"' if " " in q else q.lower() for q in batch) + ")"
+    return None

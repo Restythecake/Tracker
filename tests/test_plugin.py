@@ -39,7 +39,7 @@ def test_dsl_full_line():
 def test_dsl_defaults_and_comparisons():
     s = parse_line("thinkpad t14 <600 >150 zustand:gebraucht kauf:sofort").search
     assert s.name == "thinkpad t14" and (s.min_price, s.max_price) == (150, 600)
-    assert s.condition == "used" and s.buying == "fixed" and s.sources == ["ebay", "kleinanzeigen", "vinted"]
+    assert s.condition == "used" and s.buying == "fixed" and s.sources == ["ebay", "kleinanzeigen", "vinted", "mydealz"]
 
 
 def test_dsl_paused_invalid_and_duplicates():
@@ -332,3 +332,53 @@ def test_changed_search_drops_old_matches(rig):
     engine.run_once()
     shown = list(engine.store.recent_matches(limit=5, include_silent=True))
     assert [m.listing.item_id for m in shown] == ["2"], "alte Treffer (max:600) müssen weg"
+
+
+def test_adding_a_source_keeps_history_and_reads_new_source_silently(rig):
+    """Seit 0.7: @mydealz dazunehmen löscht keine Treffer, und die neue Quelle meldet
+    beim ersten Mal nichts, was dort schon steht."""
+    engine, ebay, ka, client = rig
+    engine.update_settings({"searches": ["thinkpad t14 max:600 -defekt @ebay"]}, trigger=False)
+    ebay.items = [item("ebay", 1)]
+    engine.run_once()
+    ka.items = [item("kleinanzeigen", 10), item("kleinanzeigen", 11)]
+    engine.update_settings({"searches": ["thinkpad t14 max:600 -defekt @ebay @ka"]}, trigger=False)
+    engine.run_once()
+    assert client.sent == []
+    keys = {m.listing.key for m in engine.store.recent_matches(limit=10, include_silent=True)}
+    assert keys == {"ebay:1", "kleinanzeigen:10", "kleinanzeigen:11"}
+    ka.items.append(item("kleinanzeigen", 12))
+    engine.run_once()
+    assert [s["url"].rsplit("/", 1)[1] for s in client.sent] == ["12"]
+
+
+def test_removing_a_source_drops_only_its_matches_and_readd_is_silent(rig):
+    engine, ebay, ka, client = rig
+    ebay.items, ka.items = [item("ebay", 1)], [item("kleinanzeigen", 10)]
+    engine.run_once()
+    engine.update_settings({"searches": ["thinkpad t14 max:600 -defekt @ebay"]}, trigger=False)
+    engine.run_once()
+    keys = {m.listing.key for m in engine.store.recent_matches(limit=10, include_silent=True)}
+    assert keys == {"ebay:1"}
+    ka.items.append(item("kleinanzeigen", 11))
+    engine.update_settings({"searches": ["thinkpad t14 max:600 -defekt @ebay @ka"]}, trigger=False)
+    engine.run_once()
+    assert client.sent == [], "wieder dazugenommene Quelle liest still neu ein"
+
+
+def test_pre_07_signature_is_migrated_not_reset(rig):
+    from nest_plugin.engine import signature
+    engine, ebay, ka, client = rig
+    seen = []  # die Suche, wie die Engine sie prüft (mit Preisdeckel usw.)
+    check = engine._check
+    engine._check = lambda search, source, settings, summary: (seen.append((search, settings)),
+                                                                check(search, source, settings, summary))
+    ebay.items = [item("ebay", 1)]
+    engine.run_once()
+    search, settings = seen[-1]
+    legacy = signature(search, settings, with_sources=True)
+    engine.store.set_signature(search.name, legacy)  # so liegt es nach dem Update in der DB
+    ebay.items.append(item("ebay", 2))
+    engine.run_once()
+    assert [s["url"].rsplit("/", 1)[1] for s in client.sent] == ["2"]
+    assert engine.store.search_state(search.name)["signature"] == signature(search, settings)

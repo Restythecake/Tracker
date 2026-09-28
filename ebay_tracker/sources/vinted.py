@@ -24,7 +24,8 @@ from bs4 import BeautifulSoup
 from ..config import Search, Settings
 from ..models import Listing
 from .base import SourceError
-from .http import REQUEST_ERRORS, new_session
+from .fetch import Fetcher
+from .http import REQUEST_ERRORS
 
 log = logging.getLogger(__name__)
 
@@ -82,39 +83,36 @@ def parse_results(html: str) -> list[Listing]:
 class VintedSource:
     def __init__(self, settings: Settings, session=None):
         self.settings = settings
-        self.session = session or new_session("de-DE,de;q=0.9")
-        self._warm = session is not None
+        self.fetcher = Fetcher("vinted", "Vinted", mode=settings.fetcher_for("vinted"), session=session,
+                               accept_language="de-DE,de;q=0.9")
+        # Für welche Session die Cookies schon geholt sind (nach einer Sperre gibt es eine neue)
+        self._warm_for = self.fetcher.session if session is not None else None
 
     def _warm_up(self) -> None:
         # Die Startseite setzt anon_id/access_token_web; ohne sie liefert der
         # Katalog eine leere Hülle.
-        if not self._warm:
+        session = self.fetcher.session
+        if self._warm_for is not session:
             try:
-                self.session.get(BASE + "/", timeout=20)
+                session.get(BASE + "/", timeout=20)
             except REQUEST_ERRORS as exc:
                 log.debug("Vinted-Warmup: %s", exc)
-            self._warm = True
+            self._warm_for = session
 
     def search(self, search: Search) -> list[Listing]:
-        self._warm_up()
         results: dict[str, Listing] = {}
         for i, query in enumerate(search.all_queries):
             if i:
                 time.sleep(1.5)
+            self._warm_up()
             params = {"search_text": query, "order": "newest_first"}
             if search.min_price is not None:
                 params["price_from"] = f"{search.min_price:.0f}"
             if search.max_price is not None:
                 params["price_to"] = f"{search.max_price:.0f}"
-            try:
-                resp = self.session.get(BASE + "/catalog", params=params, timeout=30)
-            except REQUEST_ERRORS as exc:
-                raise SourceError(f"Vinted nicht erreichbar: {exc.__class__.__name__}") from exc
-            if resp.status_code in (403, 429):
-                raise SourceError(f"Vinted blockt die Anfrage ({resp.status_code})", blocked=True)
-            if resp.status_code != 200:
-                raise SourceError(f"Vinted-Suche fehlgeschlagen ({resp.status_code})")
-            html = resp.content.decode("utf-8", errors="replace")
-            for listing in parse_results(html):
+            page = self.fetcher.get(BASE + "/catalog", params=params)
+            if page.status != 200:
+                raise SourceError(f"Vinted-Suche fehlgeschlagen ({page.status})")
+            for listing in parse_results(page.text):
                 results.setdefault(listing.item_id, listing)
         return list(results.values())[: self.settings.max_results]

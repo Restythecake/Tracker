@@ -32,7 +32,7 @@ from ebay_tracker.models import SOURCE_LABELS, format_money
 
 from .engine import Engine
 from .store import Match, now, parse_iso
-from .widgets import ago, until
+from .widgets import ago, source_checks, until
 
 NEST_ORIGIN = os.environ.get("NEST_DASHBOARD_ORIGIN", "https://nest.mini.shibusa.moe")
 
@@ -379,11 +379,22 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
         f"<div class=sub>{'Prüfung läuft …' if engine.running else 'Nächste Prüfung ' + until(engine.next_run_at) if engine.next_run_at else ''}</div></div>"
         f"<div class=stats>{stat_html}</div>"
         f"<div class=section><h2>Suchen</h2><div class=searches>{''.join(cards)}</div></div>"
+        f"{_sources_section()}"
         f"<div class=section><div class=top><h2>Angebote</h2><div class=spacer></div>"
         f"<div class=chips>{''.join(chips)}</div></div>{grid}</div>"
         "</div>"
     )
     return _page(body, page=True, reload_ms=120_000, base=base)
+
+
+def _sources_section() -> str:
+    """Abrufstatistik je Quelle seit dem Start (Stufe 1 / Browser-Rettung / Sperre)."""
+    rows = source_checks()
+    if not rows:
+        return ""
+    cards = "".join(f"<div class=srch><div class=h><span class='dot {r['state']}'></span><span>{esc(r['label'])}</span>"
+                    f"</div><div class=m>{esc(r['detail'])}</div></div>" for r in rows)
+    return f"<div class=section><h2>Quellen seit dem Start</h2><div class=searches>{cards}</div></div>"
 
 
 def go(target_url: str | None) -> str:

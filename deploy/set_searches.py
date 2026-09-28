@@ -10,13 +10,13 @@ SEARCHES = [
     'zustand:gebraucht kauf:sofort -defekt -bastler',
     'name:"Grafikkarten einzeln" rtx 3090 | rtx 4080 | rtx 5070 ti | rtx 4070 ti super | rx 7900 xtx | rx 7900 xt '
     '250-1000 bewertung:gpu gpu:3080 deal:0.8 zustand:gebraucht kauf:sofort -defekt -bastler @ebay @ka @vinted',
-    'name:"RAM 64GB Deals" ddr4 64gb | ddr5 64gb bewertung:ram ram:64 -defekt -ecc -server @ebay @ka @vinted',
+    'name:"RAM 64GB Deals" ddr4 64gb | ddr5 64gb bewertung:ram ram:64 -defekt -ecc -server @ebay @ka @vinted @md',
     'name:"RAM 96/128GB Deals" ddr4 96gb | ddr4 128gb | ddr5 96gb | ddr5 128gb '
-    'bewertung:ram ram:96 -defekt -ecc -server',
+    'bewertung:ram ram:96 -defekt -ecc -server @ebay @ka @md',
     'name:"Zelda-Switch bis UVP" switch 2 zelda edition | switch 2 zelda konsole | switch 2 zelda jubiläum '
     '350-540 +zelda +"switch 2" ~edition ~jubiläum ~anniversary ~sondermodell ~40 '
     '-spiel -softwarekarte -tears -kingdom -breath -botw -totk -ocarina -lot -bundle -hülle -tasche '
-    '-controller -amiibo -dock -skin -folie -suche -tausch @ka @vinted @ebay',
+    '-controller -amiibo -dock -skin -folie -suche -tausch @ka @vinted @ebay @md',
 ]
 BODY = json.dumps({
     "searches": SEARCHES,

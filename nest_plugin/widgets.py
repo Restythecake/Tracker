@@ -12,6 +12,7 @@ from typing import Any
 import json
 
 from ebay_tracker.models import SOURCE_LABELS, format_money
+from ebay_tracker.sources.fetch import STATS
 
 from .engine import Engine
 from .store import iso, now, parse_iso
@@ -146,10 +147,24 @@ def searches(engine: Engine, size: str | None) -> dict[str, Any]:
             worst = "warn"
         else:
             checks.append({"label": s.name, "state": "ok", "detail": detail})
+    checks += source_checks()
     nxt = until(engine.next_run_at)
     label = "Läuft gerade …" if engine.running else (f"Nächste Prüfung {nxt}" if nxt else "Suchen")
     return {"kind": "status", "state": worst, "label": label, "checks": checks,
             **({"message": _warning(engine)} if worst == "warn" and _warning(engine) else {})}
+
+
+def source_checks() -> list[dict[str, Any]]:
+    """Je Quelle seit dem Start: "eBay: 12 ok · 5 per Browser gerettet · 0 gesperrt"."""
+    rows = []
+    for name, s in sorted(STATS.snapshot().items(), key=lambda kv: list(SOURCE_LABELS).index(kv[0])
+                          if kv[0] in SOURCE_LABELS else 99):
+        if not s.requests:
+            continue
+        detail = f"{s.http_ok + s.browser_ok} ok · {s.rescued} per Browser gerettet · {s.blocked} gesperrt"
+        rows.append({"label": SOURCE_LABELS.get(name, name), "detail": detail,
+                     "state": "ok" if not s.blocked else ("warn" if s.ok else "error")})
+    return rows
 
 
 def deals(engine: Engine, size: str | None) -> dict[str, Any]:

@@ -8,6 +8,7 @@ SOURCE_LABELS = {
     "ebay": "eBay",
     "kleinanzeigen": "Kleinanzeigen",
     "vinted": "Vinted",
+    "mydealz": "mydealz",
 }
 
 

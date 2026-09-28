@@ -15,8 +15,8 @@ PLUGIN_ID = "arthur.tracker"
 
 SEARCH_HELP = (
     "Eine Suche pro Eintrag. Wörter = Suchbegriff · +wort muss im Titel stehen · ~wort eines davon · "
-    "-wort darf nicht vorkommen · max:600 / min:150 / 150-600 Preis · @ebay / @kleinanzeigen nur diese "
-    "Quelle (@vinted auch) · plz:10115 umkreis:30 · zustand:gebraucht · kauf:sofort · name:\"Anzeigename\" · "
+    "-wort darf nicht vorkommen · max:600 / min:150 / 150-600 Preis · @ebay / @kleinanzeigen / @vinted / "
+    "@mydealz nur diese Quelle · plz:10115 umkreis:30 · zustand:gebraucht · kauf:sofort · name:\"Anzeigename\" · "
     "a | b mehrere Suchbegriffe · kat:pc nur PCs · bewertung:pc|gpu|ram bewertet den Preis und meldet "
     "nur Deals · deal:0.8 nur unter 80 % des Werts · gpu:3080 / ram:32 Mindestausstattung · "
     "// am Anfang pausiert die Suche."
@@ -27,7 +27,7 @@ MANIFEST = {
     "id": PLUGIN_ID,
     "name": "Tracker",
     "version": __version__,
-    "description": "Beobachtet eBay und Kleinanzeigen nach deinen Suchen und meldet neue passende Angebote sofort per Push.",
+    "description": "Beobachtet eBay, Kleinanzeigen, Vinted und mydealz nach deinen Suchen und meldet neue passende Angebote sofort per Push.",
     "author": "Arthur",
     "icon": "icons/tracker.svg",
     "runtime": {"kind": "docker", "port": 8080},
@@ -89,8 +89,9 @@ MANIFEST = {
                 "x-nest-placeholder": "thinkpad t14 32gb max:600 +32gb -defekt",
             },
             "default_sources": {
-                "type": "array", "items": {"type": "string", "enum": ["ebay", "kleinanzeigen", "vinted"]},
-                "title": "Quellen", "description": "Wo gesucht wird, wenn eine Suche kein @ebay/@kleinanzeigen nennt.",
+                "type": "array", "items": {"type": "string", "enum": ["ebay", "kleinanzeigen", "vinted", "mydealz"]},
+                "title": "Quellen", "description": "Wo gesucht wird, wenn eine Suche kein @ebay/@kleinanzeigen/@vinted/@mydealz "
+                                                     "nennt. Eine neu dazugenommene Quelle liest beim ersten Lauf still ein.",
                 "default": ["ebay", "kleinanzeigen"],
             },
             "interval_minutes": {
@@ -138,6 +139,21 @@ MANIFEST = {
             "digest_hour": {
                 "type": "integer", "minimum": 0, "maximum": 23, "default": 19,
                 "title": "Tagesüberblick um (Uhr)", "description": "0 = aus. Faire Angebote und Preissenkungen gesammelt.",
+            },
+            "fetcher": {
+                "type": "string", "enum": ["auto", "http", "stealth"], "default": "auto",
+                "title": "Seitenabruf",
+                "description": "auto: schneller HTTP-Abruf, nur wenn der Marktplatz sperrt (403/Captcha) holt ein "
+                               "getarnter Browser die Seite – erst wenn auch der scheitert, pausiert die Quelle 30 min. "
+                               "http: nie Browser (spart ~250 MB RAM). stealth: immer Browser (langsam, nur bei "
+                               "Dauersperre sinnvoll).",
+                "x-nest-advanced": True,
+            },
+            "fetcher_overrides": {
+                "type": "array", "items": {"type": "string"}, "title": "Seitenabruf je Quelle",
+                "description": "Abweichungen vom Seitenabruf oben, je Zeile Quelle=Modus, z. B. ebay=stealth oder "
+                               "vinted=http.",
+                "default": [], "x-nest-advanced": True, "x-nest-placeholder": "ebay=stealth",
             },
             "restock_urls": {
                 "type": "array", "items": {"type": "string"}, "title": "Restock: Shop-URLs",

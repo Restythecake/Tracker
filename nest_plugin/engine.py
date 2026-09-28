@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from ebay_tracker.config import MARKETPLACES, Search, Settings
+from ebay_tracker.config import FETCH_MODES, MARKETPLACES, Search, Settings
 from ebay_tracker.filters import rejection_reason
 from ebay_tracker import hardware
 from ebay_tracker.fraud import assess_risk
@@ -76,6 +76,10 @@ class PluginSettings:
     # Harte Obergrenze für ALLE Suchen (0 = aus). Arthur: "alles über 1000 € ist zu viel".
     max_price_cap: int = 1000
     digest_hour: int = 19  # 0 = aus
+    # Seitenabruf: auto = HTTP, bei Sperre Browser (Scrapling) | http | stealth
+    fetcher: str = "auto"
+    # Abweichungen je Quelle, Einträge wie "ebay=stealth"
+    fetcher_overrides: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "PluginSettings":
@@ -113,6 +117,8 @@ class PluginSettings:
         pick("restock_interval_seconds", int, lambda v: 30 <= v <= 3600)
         pick("max_price_cap", int, lambda v: 0 <= v <= 100000)
         pick("digest_hour", int, lambda v: 0 <= v <= 23)
+        pick("fetcher", str, lambda v: v in FETCH_MODES)
+        pick("fetcher_overrides", list)
         if raw.get("restock_urls") is not None:
             if isinstance(raw["restock_urls"], list):
                 s.restock_urls = [str(x) for x in raw["restock_urls"]]
@@ -129,7 +135,19 @@ class PluginSettings:
             ebay_client_secret=self.ebay_client_secret or None,
             kleinanzeigen_plz=plz or None,
             kleinanzeigen_radius_km=self.kleinanzeigen_radius or None,
+            fetcher=self.fetcher,
+            fetchers=self.fetcher_map(),
         )
+
+    def fetcher_map(self) -> dict[str, str]:
+        """["ebay=stealth", "vinted = http"] -> {"ebay": "stealth", "vinted": "http"}; Unsinn fällt raus."""
+        out = {}
+        for entry in self.fetcher_overrides:
+            source, _, mode = entry.partition("=")
+            source, mode = source.strip().lower().lstrip("@"), mode.strip().lower()
+            if source in SOURCE_LABELS and mode in FETCH_MODES:
+                out[source] = mode
+        return out
 
 
 def format_notification(search_name: str, listing: Listing) -> tuple[str, str]:
@@ -165,13 +183,22 @@ def _kind_of(url: str) -> str:
     return "mm"
 
 
-def signature(search: Search, settings: "PluginSettings | None" = None) -> str:
-    """Was das Ergebnis einer Suche bestimmt. Name und Pause gehören nicht dazu."""
+def signature(search: Search, settings: "PluginSettings | None" = None, *, with_sources: bool = False) -> str:
+    """Was das Ergebnis einer Suche bestimmt. Name und Pause gehören nicht dazu.
+
+    Die Quellen auch nicht (seit 0.7): Eine Quelle dazunehmen soll nicht die
+    ganze Trefferhistorie löschen -- das stille Einlesen läuft ohnehin je
+    Quelle, und eine entfernte Quelle räumt nur ihre eigenen Treffer weg.
+    ``with_sources=True`` liefert die alte Signatur, damit bestehende Suchen
+    beim Update übernommen statt zurückgesetzt werden.
+    """
     data = asdict(search)
     if settings is not None and "kleinanzeigen" in search.sources and not search.plz:
         data["_ka_area"] = [settings.kleinanzeigen_plz, settings.kleinanzeigen_radius]
     data.pop("name", None)
     data.pop("enabled", None)
+    if not with_sources:
+        data.pop("sources", None)
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -441,12 +468,20 @@ class Engine:
         # Der globale Kleinanzeigen-Umkreis gehört zum Ergebnis: ein neuer Ort
         # bringt lauter "neue" Anzeigen, die nur vorher außer Reichweite waren.
         sig = signature(search, settings)
-        initialized = self.store.initialized_sources(search.name, sig)
         row = self.store.search_state(search.name)
+        if row is not None and row["signature"] == signature(search, settings, with_sources=True):
+            # Gespeichert mit der Signatur von vor 0.7 (inkl. Quellen): übernehmen.
+            self.store.set_signature(search.name, sig)
+            row = self.store.search_state(search.name)
+        wanted = set(search.sources)
+        initialized = self.store.initialized_sources(search.name, sig) & wanted
         if row is not None and row["signature"] != sig:
             # Geändert (z. B. neuer Umkreis): die alten Treffer passen nicht mehr.
             self.store.drop_matches(search.name)
             initialized = set()
+        elif row is not None:
+            # Quelle entfernt: nur deren Treffer weg; kommt sie zurück, liest sie still neu ein.
+            self.store.drop_source_matches(search.name, wanted)
         listings, errors = source.search_detailed(search)
         answered = {name for name in search.sources if name not in errors}
         error = None
@@ -523,7 +558,8 @@ class Engine:
         self.store.commit()
         prices = [l.price for l in matched if l.price is not None and l.price > 0]
         self.store.record_run(search.name, sig, fetched=len(listings), matched=len(matched), new=new,
-                              prices=prices, error=error, source_errors=errors, answered=answered)
+                              prices=prices, error=error, source_errors=errors, answered=answered,
+                              sources=wanted)
         log.info("[%s] %d geholt, %d passend, %d zu melden%s%s", search.name, len(listings), len(matched), new,
                  f", {quiet} still" if quiet else "", f" – Fehler: {errors}" if errors else "")
 

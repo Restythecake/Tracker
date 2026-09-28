@@ -8,13 +8,14 @@ from ..models import SOURCE_LABELS, Listing
 from .base import Source, SourceError
 from .ebay_api import EbayApiSource
 from .kleinanzeigen import KleinanzeigenSource
+from .mydealz import MydealzSource
 from .scraper import EbayScraperSource
 from .vinted import VintedSource
 
 log = logging.getLogger(__name__)
 
 __all__ = [
-    "Source", "SourceError", "EbayApiSource", "EbayScraperSource", "KleinanzeigenSource",
+    "Source", "SourceError", "EbayApiSource", "EbayScraperSource", "KleinanzeigenSource", "MydealzSource",
     "MultiSource", "create_source", "create_ebay_source",
 ]
 
@@ -101,4 +102,5 @@ def create_source(settings: Settings) -> MultiSource:
         "ebay": create_ebay_source(settings),
         "kleinanzeigen": KleinanzeigenSource(settings),
         "vinted": VintedSource(settings),
+        "mydealz": MydealzSource(settings),
     })

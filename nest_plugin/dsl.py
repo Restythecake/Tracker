@@ -16,7 +16,7 @@ jede Suche eine Zeile in einer kleinen Syntax, die man ohne Anleitung lesen kann
 | ``max:600`` ``<600``      | Höchstpreis                                      |
 | ``min:150`` ``>150``      | Mindestpreis                                     |
 | ``150-600``               | Preisspanne (``€`` erlaubt)                       |
-| ``@ebay`` ``@kleinanzeigen`` (``@ka``) | nur diese Quellen (sonst alle)      |
+| ``@ebay`` ``@kleinanzeigen`` (``@ka``) ``@vinted`` ``@mydealz`` (``@md``) | nur diese Quellen |
 | ``plz:10115`` ``umkreis:30`` | Kleinanzeigen-Umkreis nur für diese Suche     |
 | ``zustand:neu|gebraucht`` | eBay-Zustand                                     |
 | ``kauf:sofort|auktion``   | eBay-Angebotsformat                              |
@@ -48,6 +48,8 @@ SOURCE_ALIASES = {
     "ebay-kleinanzeigen": "kleinanzeigen",
     "vinted": "vinted",
     "vi": "vinted",
+    "mydealz": "mydealz",
+    "md": "mydealz",
 }
 _NUM = r"(\d+(?:[.,]\d+)?)\s*€?"
 _RANGE = re.compile(rf"^{_NUM}\s*-\s*{_NUM}$")

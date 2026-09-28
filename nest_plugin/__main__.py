@@ -8,6 +8,9 @@ import sys
 import threading
 from pathlib import Path
 
+from ebay_tracker.sources import parsing
+from ebay_tracker.sources.fetch import BROWSER
+
 from .engine import Engine
 from .nest_client import NestClient
 from .server import serve, wait_for_settings
@@ -20,11 +23,15 @@ def main() -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         stream=sys.stdout,
     )
+    # Scrapling meldet jeden Abruf doppelt auf INFO; unsere Zeilen ("per Browser gerettet") reichen.
+    logging.getLogger("scrapling").setLevel(logging.WARNING)
     log = logging.getLogger("nest_plugin")
     port = int(os.environ.get("PORT", "8080"))
     data_dir = Path(os.environ.get("DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Fingerabdrücke der Trefferkarten für Scraplings Selbstheilung (sources/parsing.py)
+    parsing.configure(str(data_dir / "scrapling.db") if parsing.HAS_SELECTOR else None)
     store = Store(data_dir / "tracker.db")
     client = NestClient(token=persisted_token(data_dir))
     engine = Engine(store, client)
@@ -33,6 +40,7 @@ def main() -> int:
     def shutdown(*_):
         log.info("Beende …")
         engine.stop()
+        BROWSER.close()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, shutdown)

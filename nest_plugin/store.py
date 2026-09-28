@@ -178,10 +178,12 @@ class Store:
 
     def record_run(self, name: str, signature: str, *, fetched: int, matched: int, new: int,
                    prices: list[float], error: str | None, source_errors: dict[str, str],
-                   answered: set[str]) -> None:
+                   answered: set[str], sources: set[str] | None = None) -> None:
         at = iso(now())
         with self._lock:
             done = self.initialized_sources(name, signature) | answered
+            if sources is not None:  # entfernte Quellen vergessen ihr Einlesen
+                done &= sources
             row = self.search_state(name)
             init_at = row["initialized_at"] if row and row["signature"] == signature else None
             if done and init_at is None:
@@ -221,6 +223,25 @@ class Store:
             self.conn.execute("DELETE FROM listings WHERE key NOT IN (SELECT key FROM matches)")
             self.conn.execute("DELETE FROM runs WHERE search = ?", (search,))
             self.conn.commit()
+
+    def set_signature(self, search: str, signature: str) -> None:
+        with self._lock:
+            self.conn.execute("UPDATE searches SET signature = ? WHERE name = ?", (signature, search))
+            self.conn.commit()
+
+    def drop_source_matches(self, search: str, keep: set[str]) -> int:
+        """Löscht die Treffer einer Suche aus Quellen, die sie nicht mehr fragt.
+
+        Schlüssel sind ``quelle:id``; die Suche selbst bleibt initialisiert."""
+        with self._lock:
+            rows = self.conn.execute("SELECT key FROM matches WHERE search = ?", (search,)).fetchall()
+            gone = [r["key"] for r in rows if r["key"].split(":", 1)[0] not in keep]
+            if gone:
+                self.conn.executemany("DELETE FROM matches WHERE search = ? AND key = ?",
+                                      [(search, k) for k in gone])
+                self.conn.execute("DELETE FROM listings WHERE key NOT IN (SELECT key FROM matches)")
+                self.conn.commit()
+            return len(gone)
 
     def forget_searches_except(self, names: set[str]) -> None:
         """Gelöschte Suchen verschwinden aus den Widgets; ihre Treffer bleiben in der Historie."""

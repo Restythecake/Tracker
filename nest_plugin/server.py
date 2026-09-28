@@ -34,7 +34,7 @@ from .widgets import WIDGETS
 log = logging.getLogger(__name__)
 
 ICON_DIR = Path(__file__).parent / "icons"
-IMAGE_HOSTS = ("i.ebayimg.com", "img.kleinanzeigen.de", ".vinted.net")
+IMAGE_HOSTS = ("i.ebayimg.com", "img.kleinanzeigen.de", ".vinted.net", "static.mydealz.de")
 MAX_IMAGE = 2 * 1024 * 1024
 MAX_BODY = 1024 * 1024
 
@@ -76,7 +76,8 @@ class ImageCache:
         mime = _sniff(data[:16])
         if not mime.startswith("image/"):
             return None
-        tmp = path.with_suffix(".tmp")
+        # Eigene Temp-Datei je Thread: zwei Karten mit demselben Bild laden parallel.
+        tmp = self.dir / f"{name}.{threading.get_ident()}.tmp"
         tmp.write_bytes(data)
         tmp.replace(path)
         self._evict()
@@ -84,9 +85,17 @@ class ImageCache:
 
     def _evict(self) -> None:
         with self._lock:
-            files = sorted(self.dir.glob("*"), key=lambda p: p.stat().st_mtime)
+            # Temp-Dateien laufender Downloads auslassen; sie verschwinden gleich (sonst FileNotFoundError).
+            files = sorted((p for p in self.dir.glob("*") if p.suffix != ".tmp"), key=_mtime)
             for old in files[: max(0, len(files) - self.max_files)]:
                 old.unlink(missing_ok=True)
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:  # von einem parallelen _evict schon gelöscht
+        return 0.0
 
 
 def card_image_url(url: str) -> str:

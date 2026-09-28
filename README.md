@@ -73,6 +73,48 @@ eigener Check. Eigene Shop-URLs: Einstellung „Restock: Shop-URLs“ (eine URL 
 
 Was beim Bauen über Nests Plugin-API aufgefallen ist: [docs/nest-plugin-bericht.md](docs/nest-plugin-bericht.md).
 
+## Abruf: HTTP zuerst, Browser bei Sperre (Scrapling, ab 0.7)
+
+eBay sitzt hinter Akamai und hat den reinen HTTP-Client (curl_cffi, Chrome-Fingerprint) am
+27./28.09.2026 **39× in 24 h** gesperrt – bei 30 min Pause je Sperre war eBay fast den ganzen Tag
+aus. Seit 0.7 eskaliert der Abruf (`ebay_tracker/sources/fetch.py`):
+
+1. **Stufe 1 – HTTP** (curl_cffi): schnell, wenig RAM, reicht meistens.
+2. **Stufe 2 – Browser** ([Scrapling](https://github.com/D4Vinci/Scrapling) `StealthySession`,
+   getarntes Chromium): nur wenn Stufe 1 gesperrt wird (403/429/503, Captcha, Cloudflare). Eine
+   Session für den ganzen Prozess, ein Tab, ohne Bilder/Fonts/CSS; wärmt je Host einmal die
+   Startseite an (Akamai setzt dabei seine Cookies), schließt sich nach 5 min Leerlauf.
+3. Erst wenn **beide** scheitern, gilt die Quelle als gesperrt und pausiert 30 min.
+
+**Weniger Anfragen statt mehr Tarnung**: Die eigentliche Ursache der Sperren war die Menge –
+jede Alternative (`a | b | c`) war eine eigene eBay-Anfrage, ~20 alle 10 Minuten. Der Scraper
+fasst sie jetzt zu eBays ODER-Syntax zusammen, ohne die Bedeutung zu ändern
+(`combine_queries` in `sources/scraper.py`): `gaming pc | pc rtx` → `pc (gaming,rtx)`,
+`ddr4 96gb | … | ddr5 128gb` → `(128gb,96gb) (ddr4,ddr5)`, GPU-Modelle → `("rtx 3090","rx 7900 xtx")`.
+Was sich nicht sauber zerlegen lässt, bleibt einzeln. Mit den aktuellen Suchen: 6 statt 20
+eBay-Anfragen je Lauf.
+
+Einstellung **Abruf** (`fetcher`): `auto` (Standard, wie oben), `http` (nur Stufe 1, altes
+Verhalten), `stealth` (immer Browser). Je Quelle überschreibbar (`fetcher_overrides`, z. B.
+`ebay=stealth`). Das Status-Widget zeigt je Quelle, wie oft Stufe 1 reichte, wie oft der Browser
+gerettet hat und wie oft beides gesperrt war.
+
+**Parser**: Kleinanzeigen und eBay lesen über `scrapling.parser.Selector` mit adaptivem Tracking
+(`/data/scrapling.db`): liefern die Selektoren nach einem Seitenumbau nichts mehr, sucht Scrapling
+die zuletzt gemerkten Elemente per Ähnlichkeit wieder. Fehlt Scrapling, läuft der alte BS4-Pfad.
+
+**Image**: Mit Browser ~1,8 GB statt 266 MB (`docker build --build-arg WITH_BROWSER=0` baut das
+schlanke Image ohne Stufe 2). RAM im Betrieb gemessen ~680 MB während eines Laufs mit Browser;
+ohne Arbeit wird der Browser nach 5 min geschlossen.
+
+**mydealz** (`@mydealz`/`@md`): liest die serverseitig gerenderte Suche (Deal-JSON im
+`data-vue3`-Attribut, kein Browser nötig). Nur aktive Deals, Suchwörter müssen im Titel stehen.
+Achtung: `hide_expired`/`sortBy=new` liefern bei mydealz eine fast leere Seite, deshalb ohne.
+
+**Quellen ändern löscht keine Historie mehr**: Die Quellen gehören seit 0.7 nicht mehr zur
+Such-Signatur. Eine neue Quelle liest still ein (keine Meldungsflut), eine entfernte Quelle nimmt
+nur ihre eigenen Treffer mit. Bestehende Suchen werden beim Update übernommen, nicht zurückgesetzt.
+
 ## Schnellstart (CLI)
 
 ```bash
