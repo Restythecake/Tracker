@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS restock (
     changed_at  TEXT,
     note        TEXT
 );
+CREATE TABLE IF NOT EXISTS archive (
+    key     TEXT PRIMARY KEY,  -- Anzeige (quelle:id), gilt für alle Suchen
+    at      TEXT NOT NULL,
+    reason  TEXT,
+    auto    INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -112,6 +118,9 @@ class Match:
     notified: int  # 0 nein, 1 per Push, 2 beim Einlesen bekannt
     silent: int
     listing: Listing
+    archived_at: datetime | None = None
+    archived_reason: str | None = None
+    archived_auto: bool | None = None
 
 
 class Store:
@@ -389,12 +398,74 @@ class Store:
             row = self.conn.execute("SELECT * FROM listings WHERE key = ?", (key,)).fetchone()
         return _listing(row) if row else None
 
+    # ------------------------------------------------------------ archive
+    def archive(self, keys: list[str], *, reason: str, auto: bool) -> int:
+        """Aus der Liste nehmen (nicht löschen). Von Hand schlägt automatisch."""
+        if not keys:
+            return 0
+        at = iso(now())
+        with self._lock:
+            n = 0
+            for key in keys:
+                cur = self.conn.execute(
+                    "INSERT INTO archive (key, at, reason, auto) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET at = excluded.at, reason = excluded.reason, auto = 0 "
+                    "WHERE excluded.auto = 0 AND archive.auto = 1",
+                    (key, at, reason, int(auto)))
+                n += cur.rowcount
+            self.conn.commit()
+            return n
+
+    def unarchive(self, keys: list[str]) -> int:
+        if not keys:
+            return 0
+        with self._lock:
+            cur = self.conn.execute(f"DELETE FROM archive WHERE key IN ({','.join('?' * len(keys))})", keys)
+            self.conn.commit()
+            return cur.rowcount
+
+    def archived_keys(self) -> list[str]:
+        with self._lock:
+            return [r["key"] for r in self.conn.execute("SELECT key FROM archive").fetchall()]
+
+    def archive_info(self, key: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute("SELECT * FROM archive WHERE key = ?", (key,)).fetchone()
+
+    def is_muted(self, key: str) -> bool:
+        """Von Hand archiviert: nie wieder melden, auch nicht bei Preissenkung."""
+        with self._lock:
+            return self.conn.execute("SELECT 1 FROM archive WHERE key = ? AND auto = 0", (key,)).fetchone() is not None
+
+    def revive_seen(self) -> int:
+        """Automatisch als "nicht mehr online" archiviert, aber wieder aufgetaucht -> zurück."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM archive WHERE auto = 1 AND reason = 'nicht mehr online' AND key IN "
+                "(SELECT l.key FROM listings l JOIN archive a ON a.key = l.key WHERE l.last_seen >= a.at)")
+            self.conn.commit()
+            return cur.rowcount
+
+    def last_seen(self, key: str) -> str | None:
+        with self._lock:
+            row = self.conn.execute("SELECT last_seen FROM listings WHERE key = ?", (key,)).fetchone()
+        return row["last_seen"] if row else None
+
+    def archive_count(self) -> int:
+        with self._lock:
+            return self.conn.execute("SELECT COUNT(*) FROM archive").fetchone()[0]
+
     def recent_matches(self, *, limit: int = 50, search: str | None = None,
                        include_silent: bool = False, since: datetime | None = None,
-                       searches: list[str] | None = None) -> list[Match]:
-        sql = ("SELECT m.search, m.key, m.first_seen, m.notified, m.silent, l.* FROM matches m "
-               "JOIN listings l ON l.key = m.key WHERE 1=1")
+                       searches: list[str] | None = None, archived: bool | None = False) -> list[Match]:
+        sql = ("SELECT m.search, m.key, m.first_seen, m.notified, m.silent, l.*, "
+               "a.at AS archived_at, a.reason AS archived_reason, a.auto AS archived_auto FROM matches m "
+               "JOIN listings l ON l.key = m.key LEFT JOIN archive a ON a.key = m.key WHERE 1=1")
         args: list[Any] = []
+        if archived is False:
+            sql += " AND a.key IS NULL"
+        elif archived is True:
+            sql += " AND a.key IS NOT NULL"
         sql += " AND m.silent = 0" if not include_silent else " AND m.silent < 2"
         if search:
             sql += " AND m.search = ?"
@@ -405,18 +476,22 @@ class Store:
         if since:
             sql += " AND m.first_seen >= ?"
             args.append(iso(since))
-        sql += " ORDER BY m.first_seen DESC, l.rowid DESC LIMIT ?"
+        sql += (" ORDER BY a.at DESC, m.first_seen DESC, l.rowid DESC LIMIT ?" if archived is True
+                else " ORDER BY m.first_seen DESC, l.rowid DESC LIMIT ?")
         args.append(limit)
         with self._lock:
             rows = self.conn.execute(sql, args).fetchall()
         return [
             Match(search=r["search"], key=r["key"], first_seen=parse_iso(r["first_seen"]),
-                  notified=int(r["notified"]), silent=int(r["silent"]), listing=_listing(r))
+                  notified=int(r["notified"]), silent=int(r["silent"]), listing=_listing(r),
+                  archived_at=parse_iso(r["archived_at"]), archived_reason=r["archived_reason"],
+                  archived_auto=bool(r["archived_auto"]) if r["archived_at"] else None)
             for r in rows
         ]
 
     def count_new_since(self, since: datetime, searches: list[str] | None = None) -> int:
-        sql = "SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND notified != 2 AND first_seen >= ?"
+        sql = ("SELECT COUNT(DISTINCT key) FROM matches WHERE silent = 0 AND notified != 2 AND first_seen >= ? "
+               "AND key NOT IN (SELECT key FROM archive)")
         args: list[Any] = [iso(since)]
         if searches is not None:
             sql += f" AND search IN ({','.join('?' * len(searches)) or 'NULL'})"
@@ -427,8 +502,10 @@ class Store:
     def count_tracked(self, search: str | None = None) -> int:
         with self._lock:
             if search:
-                return self.conn.execute("SELECT COUNT(*) FROM matches WHERE search = ? AND silent < 2", (search,)).fetchone()[0]
-            return self.conn.execute("SELECT COUNT(DISTINCT key) FROM matches WHERE silent < 2").fetchone()[0]
+                return self.conn.execute("SELECT COUNT(*) FROM matches WHERE search = ? AND silent < 2 "
+                                         "AND key NOT IN (SELECT key FROM archive)", (search,)).fetchone()[0]
+            return self.conn.execute("SELECT COUNT(DISTINCT key) FROM matches WHERE silent < 2 "
+                                     "AND key NOT IN (SELECT key FROM archive)").fetchone()[0]
 
     def price_series(self, search: str, since: datetime) -> list[tuple[datetime, float]]:
         with self._lock:
@@ -441,7 +518,7 @@ class Store:
     def reset(self) -> None:
         """Vergisst Treffer und Läufe; der nächste Lauf ist wieder still."""
         with self._lock:
-            self.conn.executescript("DELETE FROM matches; DELETE FROM runs; DELETE FROM searches; DELETE FROM listings; DELETE FROM observed;")
+            self.conn.executescript("DELETE FROM matches; DELETE FROM runs; DELETE FROM searches; DELETE FROM listings; DELETE FROM observed; DELETE FROM archive;")
             self.conn.commit()
 
     def prune(self, keep_days: int = 60) -> None:
@@ -450,6 +527,7 @@ class Store:
             self.conn.execute("DELETE FROM runs WHERE at < ?", (cutoff,))
             self.conn.execute("DELETE FROM matches WHERE first_seen < ?", (cutoff,))
             self.conn.execute("DELETE FROM listings WHERE key NOT IN (SELECT key FROM matches)")
+            self.conn.execute("DELETE FROM archive WHERE key NOT IN (SELECT key FROM listings)")
             self.conn.execute("DELETE FROM observed WHERE at < ?", (cutoff,))
             self.conn.commit()
 

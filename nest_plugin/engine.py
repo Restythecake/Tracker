@@ -30,6 +30,7 @@ from ebay_tracker.restock import UVP_SWITCH2_ZELDA, run_checks
 from ebay_tracker.models import SOURCE_LABELS, Listing
 from ebay_tracker.sources import MultiSource, create_source
 
+from . import manage
 from .dsl import ParsedSearch, parse_lines
 from .nest_client import NestClient, NestError
 from .store import Store, iso, now
@@ -246,11 +247,62 @@ class Engine:
         with self._state_lock:
             old = self.settings
             self.settings = settings
-            self.parsed = parse_lines(settings.searches, settings.default_sources)
+            self.parsed = self._parse_all(settings)
             if self.source is None or old.tracker_settings() != settings.tracker_settings():
                 self.source = self.source_factory(settings.tracker_settings())
             names = {p.search.name for p in self.parsed if p.search}
             self.store.forget_searches_except(names)
+
+    def _parse_all(self, settings: PluginSettings) -> list[ParsedSearch]:
+        """Suchen aus Nests Einstellungen (mit Pause/Ausblenden von der Seite) plus eigene."""
+        ov = manage.overrides(self.store)
+        entries: list[tuple[str, str | None, str]] = []
+        for line in settings.searches:
+            if not line or not line.strip():
+                continue
+            name = self._name_of(line)
+            state = ov.get(name) if name else None
+            if state == "hidden":
+                continue
+            if state == "paused" and not line.lstrip().startswith("//"):
+                line = "// " + line
+            entries.append(("nest", None, line))
+        entries += [("custom", c.id, c.line) for c in manage.custom_searches(self.store)]
+        parsed = parse_lines([line for _, _, line in entries], settings.default_sources)
+        for p, (origin, cid, _) in zip(parsed, entries):
+            p.origin, p.cid = origin, cid
+        return parsed
+
+    @staticmethod
+    def _name_of(line: str) -> str | None:
+        from .dsl import parse_line
+        p = parse_line(line)
+        return p.search.name if p.search else None
+
+    @property
+    def hidden_searches(self) -> list[str]:
+        """Nest-Suchen, die auf der Seite ausgeblendet/übernommen wurden (zum Zurückholen)."""
+        ov = manage.overrides(self.store)
+        names = {self._name_of(l) for l in self.settings.searches if l and l.strip()}
+        return [n for n, v in ov.items() if v == "hidden" and n in names]
+
+    def reload_searches(self) -> None:
+        """Nach einer Änderung auf der Seite: neu parsen und gleich einmal laufen lassen."""
+        self._apply(self.settings)
+        self._wake.set()
+
+    def tidy(self) -> int:
+        """Automatisch archivieren (Regeln in manage.DEFAULT_RULES / auf der Seite)."""
+        try:
+            self.store.revive_seen()
+            matches = self.recent_matches(limit=3000, include_silent=True)
+            n = manage.auto_archive(self.store, matches, self.store.all_search_states())
+            if n:
+                log.info("%d Angebote automatisch archiviert", n)
+            return n
+        except Exception:
+            log.exception("Aufräumen fehlgeschlagen")
+            return 0
 
     def update_settings(self, raw: dict[str, Any] | None, *, trigger: bool = True) -> bool:
         """Neue Einstellungen übernehmen; True, wenn sich etwas geändert hat."""
@@ -339,6 +391,7 @@ class Engine:
             })
             if random.random() < 0.05:
                 self.store.prune()
+            self.tidy()
             relevant = {g for g in summary.gpus
                         if hardware.GPUS.get(hardware.market_key(g), ("", 0, 0))[1] >= 80}
             if self.market is not None and relevant:
@@ -558,6 +611,8 @@ class Engine:
                 # Neu melden, wenn es gerade erst zum Deal wurde -- oder wenn der
                 # Preis eines schon gemeldeten/bekannten Deals deutlich fällt.
                 notify = silent == 0 and (prev["notified"] == 0 or dropped)
+            if notify and manage.rules(self.store)["mute_archived"] and self.store.is_muted(listing.key):
+                notify = False  # von Hand archiviert: nervt nicht nochmal
             if notify:
                 new += 1
                 summary.new.append((search.name, listing))

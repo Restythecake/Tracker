@@ -62,6 +62,14 @@ Container schreiben (`apply-token`). Danach:
 - **Vollbild-Seite** (`nest_plugin/frame.py`, ab 0.8 im Nest-Look): KPI-Karten, „Beste Deals“ als
   große Karten, Suchen mit Preis-Sparkline, Kachelraster aller Treffer, Quellen-Statistik. Folgt dem
   Nest-Theme (hell/dunkel), ohne Build-Schritt – reines serverseitiges HTML/CSS.
+- **Seiten & Bearbeiten** (ab 0.9, `nest_plugin/manage.py`): Reiter *Übersicht · Billig · Mittel · Teuer ·
+  (Verdächtig) · Suchen · Archiv*. Preisklasse = Urteil gegen Marktwert, ohne Bewertung Preis gegen den Median
+  der Suche (≤ 85 % billig, ≥ 115 % teuer). Unter *Suchen* eigene Suchen per Formular anlegen/bearbeiten/pausieren;
+  Suchen aus Nests Einstellungen lassen sich pausieren, ausblenden oder als eigene übernehmen.
+  *Archiv*: Knopf auf jeder Karte, plus automatisch (älter als 14 Tage, „teuer“ nach 48 h, 48 h nicht mehr
+  gesehen = vermutlich verkauft; taucht es wieder auf, kommt es zurück). Von Hand Archiviertes meldet nie wieder.
+  Geschrieben wird über die Frame-Aktion `edit` (`"frame": true`), die Nest per `nest:action` unter dem
+  angemeldeten Benutzer auslöst – der Frame selbst bleibt read-only. Braucht Nest ≥ 6b6e570.
 - **Aktionen** auf der Plugin-Seite: *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
 - **Push**: jeder neue Treffer einzeln (Tippen öffnet das Angebot), ab `max_notifications` pro Lauf
   eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein

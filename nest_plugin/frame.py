@@ -35,6 +35,8 @@ from ebay_tracker.sources.fetch import STATS
 from . import __version__
 
 from .engine import Engine
+from . import manage
+from .manage import TIER_HINT, TIER_LABEL, TIERS
 from .store import Match, now, parse_iso
 from .widgets import ago, source_checks, until
 
@@ -246,7 +248,7 @@ body.page::before{content:"";position:fixed;inset:0 0 auto 0;height:420px;pointe
 .bars{position:absolute;right:20px;bottom:20px;display:flex;align-items:flex-end;gap:4px;height:40px}
 .bars i{width:7px;border-radius:3px;background:color-mix(in srgb,var(--acc) 35%,transparent);min-height:3px}
 .bars i:last-child{background:var(--acc)}
-.heroes{display:grid;grid-template-columns:repeat(auto-fill,minmax(520px,1fr));gap:20px}
+.heroes{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(520px,100%),1fr));gap:20px}
 .hero{display:grid;grid-template-columns:44% 1fr}
 .hero .media{aspect-ratio:auto;height:auto;min-height:260px}
 .hero .media img{position:absolute;inset:0}
@@ -258,7 +260,7 @@ body.page::before{content:"";position:fixed;inset:0 0 auto 0;height:420px;pointe
 .nodeal .ic{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;flex:none}
 .nodeal .ic svg.i{width:22px;height:22px}
 .nodeal b{display:block;color:var(--t1);font-size:15px;margin-bottom:2px}
-.searches{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px}
+.searches{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:18px}
 .srch{position:relative;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--b1);
   border-radius:var(--r);padding:20px 22px;box-shadow:var(--sh1);min-width:0;transition:border-color .15s,transform .2s}
 a.srch:hover{border-color:var(--b2);transform:translateY(-2px)}
@@ -277,13 +279,15 @@ a.srch:hover{border-color:var(--b2);transform:translateY(-2px)}
   background:color-mix(in srgb,var(--err) 10%,transparent);border-radius:9px;padding:8px 10px;overflow-wrap:anywhere}
 .srch .err.w{color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent)}
 .srch .err svg.i{width:14px;height:14px;margin-top:2px}
-.spark{margin-left:auto;align-self:center;width:34%;max-width:150px;height:34px;color:var(--acc);flex:none}
+.spark{margin-left:auto;align-self:center;flex:0 1 150px;min-width:48px;height:34px;color:var(--acc)}
+@media (max-width:480px){.srch .nums{gap:14px}.srch .nums b{font-size:16px}}
 .toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .toolbar .chips{flex:1;min-width:200px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(236px,100%),1fr));gap:20px}
 .more{display:flex;justify-content:center;margin-top:6px}
 .more .btn{height:40px;padding:0 22px}
-.duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}
+.duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));gap:20px}
+.duo>*,.heroes>*,.grid>*,.searches>*,.tiers>*,.kpis>*{min-width:0}
 .panel{background:var(--surface);border:1px solid var(--b1);border-radius:var(--r);padding:8px;box-shadow:var(--sh1)}
 .li{display:flex;align-items:center;gap:14px;padding:14px 14px;border-radius:12px}
 .li + .li{border-top:1px solid var(--b1);border-radius:0}
@@ -301,6 +305,135 @@ footer{color:var(--t3);font-size:12.5px;text-align:center}
 @media (max-width:640px){.wrap{padding:28px 18px 60px;gap:34px}.heroes{grid-template-columns:1fr}
   .searches,.duo{grid-template-columns:1fr}
   .kpis{gap:12px}.kpi .v{font-size:28px}.bars{display:none}.hdr h1{font-size:25px}}
+/* ---------------- Navigation ---------------- */
+.nav{position:sticky;top:0;z-index:20;margin:-10px -12px 0;padding:10px 12px;
+  background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid transparent}
+.tabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{flex:none;display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 15px;border-radius:12px;
+  color:var(--t2);font-weight:600;font-size:13.5px;border:1px solid transparent;transition:background .15s,color .15s}
+.tabs a:hover{color:var(--t1);background:var(--sunk)}
+.tabs a.on{background:var(--surface);color:var(--t1);border-color:var(--b1);box-shadow:var(--sh1)}
+.tabs a .n{min-width:22px;height:20px;padding:0 6px;border-radius:999px;display:inline-grid;place-items:center;
+  font-size:11.5px;font-weight:700;background:color-mix(in srgb,var(--c,var(--mute)) 16%,transparent);color:var(--c,var(--t2))}
+.tabs a svg.i{width:15px;height:15px;color:var(--c,var(--t3))}
+.tabs .gap{flex:none;width:1px;background:var(--b1);margin:8px 4px}
+
+/* ---------------- Preisklassen ---------------- */
+.t-billig{--c:var(--ok)}.t-mittel{--c:var(--acc)}.t-teuer{--c:var(--warn)}.t-verdaechtig{--c:var(--violet)}
+.tiers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.tier{position:relative;display:flex;flex-direction:column;gap:10px;padding:20px 22px;background:var(--surface);
+  border:1px solid var(--b1);border-radius:var(--r);box-shadow:var(--sh1);overflow:hidden;
+  transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s,border-color .2s}
+.tier:hover{transform:translateY(-2px);box-shadow:var(--sh2);border-color:color-mix(in srgb,var(--c) 40%,var(--b1))}
+.tier::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--c)}
+.tier .top{display:flex;align-items:center;gap:10px;font-weight:650}
+.tier .top .ic{width:30px;height:30px;border-radius:10px;display:grid;place-items:center}
+.tier .top .go{margin-left:auto;color:var(--t3)}
+.tier .v{font-size:32px;font-weight:750;letter-spacing:-.03em;line-height:1}
+.tier .h{color:var(--t3);font-size:12.5px;line-height:1.4}
+.tier .thumbs{display:flex;margin-top:2px}
+.tier .thumbs img,.tier .thumbs span{width:34px;height:34px;border-radius:10px;object-fit:cover;border:2px solid var(--surface);
+  background:var(--sunk);margin-right:-8px}
+.phead{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap}
+.phead .ic{width:48px;height:48px;border-radius:15px;display:grid;place-items:center;flex:none}
+.phead .ic svg.i{width:24px;height:24px}
+.phead h2{margin:0;font-size:24px;font-weight:750;letter-spacing:-.02em}
+.phead p{margin:3px 0 0;color:var(--t2);font-size:13.5px;max-width:640px}
+.phead .sp{flex:1}
+.tbadge{position:absolute;left:10px;bottom:10px;z-index:1;height:24px;padding:0 10px;border-radius:999px;display:inline-flex;
+  align-items:center;font-size:11.5px;font-weight:700;color:#fff;background:color-mix(in srgb,var(--c) 88%,black)}
+
+/* ---------------- Aktionen auf Karten ---------------- */
+.act{position:absolute;right:10px;bottom:10px;z-index:2;width:32px;height:32px;border-radius:10px;display:grid;place-items:center;
+  background:hsl(222 30% 8% / .62);color:#fff;border:1px solid hsl(0 0% 100% / .14);backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);cursor:pointer;opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s,background .15s}
+.act svg.i{width:15px;height:15px}
+.card:hover .act,.act:focus-visible{opacity:1;transform:none}
+.act:hover{background:var(--acc);color:var(--acc-fg);border-color:transparent}
+@media (hover:none){.act{opacity:1;transform:none}}
+.card.gone{opacity:0;transform:scale(.96);transition:opacity .25s,transform .25s}
+.busy{pointer-events:none;opacity:.55}
+.why{display:flex;align-items:center;gap:6px;color:var(--t3);font-size:12px}
+.why svg.i{width:13px;height:13px}
+
+/* ---------------- Formulare ---------------- */
+.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-fg);font-weight:650}
+.btn.pri:hover{filter:brightness(1.08);color:var(--acc-fg)}
+.btn.dng:hover{color:var(--err);border-color:color-mix(in srgb,var(--err) 50%,var(--b2))}
+.btn.sm{height:30px;padding:0 12px;font-size:12.5px}
+.btn.sure{background:var(--err);border-color:var(--err);color:#fff}
+.form{background:var(--surface);border:1px solid var(--b1);border-radius:var(--r);box-shadow:var(--sh1);padding:26px 28px;
+  display:flex;flex-direction:column;gap:22px}
+.form h3{margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:10px}
+.form h3 svg.i{color:var(--acc)}
+.form .note{margin:-12px 0 0;color:var(--t3);font-size:12.5px}
+.fg{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px 18px}
+.f{display:flex;flex-direction:column;gap:7px;grid-column:span 6;min-width:0}
+.f.w12{grid-column:span 12}.f.w4{grid-column:span 4}.f.w3{grid-column:span 3}.f.w8{grid-column:span 8}
+.f label,.f .lab{font-size:12.5px;font-weight:620;color:var(--t2)}
+.f small{color:var(--t3);font-size:11.5px}
+.f input,.f select,.f textarea{font:inherit;font-size:14px;color:var(--t1);background:var(--sunk);border:1px solid var(--b1);
+  border-radius:11px;height:40px;padding:0 13px;outline:none;transition:border-color .15s,box-shadow .15s;min-width:0;width:100%}
+.f textarea{height:auto;min-height:74px;padding:10px 13px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.f input:focus,.f select:focus,.f textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 22%,transparent)}
+.f .unit{position:relative}.f .unit input{padding-right:34px}
+.f .unit span{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--t3);font-size:13px;pointer-events:none}
+.checks{display:flex;gap:8px;flex-wrap:wrap}
+.checks label{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 13px;border-radius:999px;cursor:pointer;
+  background:var(--sunk);border:1px solid var(--b1);color:var(--t2);font-size:13px;font-weight:560;user-select:none}
+.checks label{position:relative}
+.checks input{position:absolute;opacity:0;pointer-events:none;width:1px!important;height:1px!important;inset:0}
+.checks label:has(input:checked){background:color-mix(in srgb,var(--c,var(--acc)) 16%,transparent);
+  border-color:color-mix(in srgb,var(--c,var(--acc)) 50%,transparent);color:var(--t1)}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:13.5px;color:var(--t2);user-select:none}
+.switch input{appearance:none;-webkit-appearance:none;width:38px;height:22px;border-radius:999px;background:var(--b2);position:relative;
+  cursor:pointer;transition:background .15s;flex:none;margin:0}
+.switch input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;
+  transition:transform .15s;box-shadow:0 1px 2px rgb(0 0 0 / .3)}
+.switch input:checked{background:var(--acc)}.switch input:checked::after{transform:translateX(16px)}
+details.pro summary{cursor:pointer;color:var(--t2);font-size:13px;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px}
+details.pro summary::-webkit-details-marker{display:none}
+details.pro summary::before{content:"›";display:inline-block;transition:transform .15s;font-size:16px}
+details.pro[open] summary::before{transform:rotate(90deg)}
+details.pro .f{margin-top:12px}
+.formfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:4px}
+.formfoot .msg{color:var(--err);font-size:13px;font-weight:560}
+.formfoot .sp{flex:1}
+
+/* ---------------- Suchen-Liste ---------------- */
+.slist{display:flex;flex-direction:column;gap:12px}
+.srow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:16px;align-items:center;padding:18px 20px;
+  background:var(--surface);border:1px solid var(--b1);border-radius:var(--r);box-shadow:var(--sh1)}
+.srow.off{opacity:.72}
+.srow .st{width:40px;height:40px;border-radius:12px;display:grid;place-items:center}
+.srow .mid{min-width:0;display:flex;flex-direction:column;gap:7px}
+.srow .t{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.srow .t b{font-size:15px;font-weight:650}
+.srow code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--t3);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;display:block}
+.srow .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--t3);font-size:12.5px}
+.srow .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.origin{height:20px;padding:0 8px;border-radius:6px;font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  display:inline-flex;align-items:center;background:var(--sunk);color:var(--t3);border:1px solid var(--b1)}
+.origin.own{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 35%,transparent);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.hint{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:14px;background:var(--sunk);border:1px solid var(--b1);
+  color:var(--t2);font-size:13px}
+.hint svg.i{color:var(--acc);margin-top:2px}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:16px 18px;align-items:end}
+.rules .f{grid-column:auto}
+
+.toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;z-index:50;max-width:min(520px,90vw);
+  padding:12px 18px;border-radius:14px;background:var(--elev);border:1px solid var(--b2);box-shadow:var(--sh2);
+  font-weight:560;font-size:13.5px;transition:opacity .2s,transform .2s;pointer-events:none}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast.err{border-color:color-mix(in srgb,var(--err) 50%,var(--b2));color:var(--err)}
+
+@media (max-width:1100px){.tiers{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.f,.f.w4,.f.w3,.f.w8{grid-column:span 12}.srow{grid-template-columns:auto minmax(0,1fr)}
+  .srow .btns{grid-column:1 / -1;justify-content:flex-start}.form{padding:20px}}
+@media (max-width:520px){.tiers{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -331,6 +464,23 @@ _I = {
             '<path d="M8 6h13"/>',
     "sparkles": '<path d="M9.94 14.06 8.5 20l-1.44-5.94L1 12.5l6.06-1.44L8.5 5l1.44 6.06L16 12.5z"/><path d="M20 3v4"/>'
                 '<path d="M22 5h-4"/>',
+    "archive": '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>'
+               '<path d="M10 12h4"/>',
+    "undo": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+    "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "edit": '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32'
+            'a2 2 0 0 0 .83-.5z"/>',
+    "pause": '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+    "play": '<polygon points="6 3 20 12 6 21 6 3"/>',
+    "trash": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+    "home": '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .71-1.53l7-6a2 2 0 0 1 2.58 0l7 6'
+            'A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    "tag": '<path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0'
+           'l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+    "up": '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+    "wand": '<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 '
+            '1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/>'
+            '<path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/>',
     "truck": '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/>'
              '<path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/>'
              '<circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
@@ -370,6 +520,7 @@ JS = """
     if(e.origin !== NEST && e.origin !== 'null') return;
     var d = e.data || {};
     if(d.type === 'nest:init' || d.type === 'nest:theme'){ theme(d.theme); try{sessionStorage.theme=d.theme}catch(_){} }
+    if(d.type === 'nest:action-result'){ done(d); }
   });
   if(embedded){
     // Outbound ebenfalls '*': eine opake Origin bekommt postMessage mit
@@ -385,15 +536,102 @@ JS = """
     if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, '*'); }
     else { window.open(url, '_blank', 'noopener'); }
   }
+  // ---- Schreiben: nur über Nest (nest:action -> Frame-Aktion "edit").
+  var pending = {}, tt;
+  function toast(text, bad){
+    var t = document.querySelector('.toast');
+    if(!t){ t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t); }
+    t.textContent = text; t.classList.toggle('err', !!bad); t.classList.add('on');
+    clearTimeout(tt); tt = setTimeout(function(){ t.classList.remove('on') }, bad ? 5200 : 2600);
+  }
+  function act(params, el, after){
+    if(!embedded){ toast('Bearbeiten geht nur in Nest – dort die Tracker-Kachel öffnen.', true); return; }
+    var id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    pending[id] = {el: el, after: after};
+    if(el) el.classList.add('busy');
+    window.parent.postMessage({type:'nest:action', action:'edit', params:params, requestId:id}, '*');
+    setTimeout(function(){
+      if(!pending[id]) return;
+      delete pending[id]; if(el) el.classList.remove('busy');
+      toast('Nest hat nicht geantwortet – Seite neu laden?', true);
+    }, 20000);
+  }
+  function done(d){
+    var p = pending[d.requestId]; if(!p) return;
+    delete pending[d.requestId];
+    if(p.el) p.el.classList.remove('busy');
+    if(!d.ok){
+      var msg = document.querySelector('form .msg');
+      if(msg && p.el && p.el.tagName === 'FORM'){ msg.textContent = d.message || 'Fehler'; }
+      toast(d.message || 'Hat nicht geklappt', true); return;
+    }
+    if(p.after){ p.after(d); return; }
+    dirty = false; toast(d.message || 'Erledigt');
+    setTimeout(function(){ location.reload() }, 450);
+  }
+  function fields(form){
+    var out = {};
+    Array.prototype.forEach.call(form.elements, function(x){
+      if(!x.name || x.name.charAt(0) === '_') return;
+      if(x.type === 'checkbox'){
+        if(x.hasAttribute('data-many')){ out[x.name] = out[x.name] || []; if(x.checked) out[x.name].push(x.value); }
+        else out[x.name] = x.checked;
+      } else out[x.name] = x.value;
+    });
+    return out;
+  }
+  document.addEventListener('submit', function(e){
+    var form = e.target.closest('form[data-op]'); if(!form) return;
+    e.preventDefault();
+    var params = {op: form.getAttribute('data-op')}, f = fields(form);
+    if(params.op === 'rules'){ params.rules = f; }
+    else { params.fields = f; params.id = form.getAttribute('data-id') || ''; params.replaces = form.getAttribute('data-replaces') || ''; }
+    act(params, form, function(d){
+      dirty = false; toast(d.message || 'Gespeichert');
+      var back = form.getAttribute('data-back');
+      setTimeout(function(){ if(back){ location.href = back } else { location.reload() } }, 450);
+    });
+  });
+  var dirty = false;
+  document.addEventListener('input', function(e){ if(e.target.closest('form')) dirty = true; });
   document.addEventListener('click', function(e){
+    var a = e.target.closest('[data-act]');
+    if(a){
+      e.preventDefault(); e.stopPropagation();
+      var op = a.getAttribute('data-act'), q = a.getAttribute('data-confirm');
+      // confirm() ist im Sandbox-Frame gesperrt (kein allow-modals): zweiter Klick bestätigt.
+      if(q && !a.classList.contains('sure')){
+        a.classList.add('sure'); a.setAttribute('data-was', a.innerHTML); a.textContent = q;
+        setTimeout(function(){ if(a.classList.contains('sure')){ a.classList.remove('sure'); a.innerHTML = a.getAttribute('data-was') } }, 4000);
+        return;
+      }
+      a.classList.remove('sure');
+      var params = {op: op, key: a.getAttribute('data-key') || '', name: a.getAttribute('data-name') || '',
+                    tier: a.getAttribute('data-tier') || '', all: a.hasAttribute('data-all')};
+      var card = a.closest('.card');
+      if((op === 'archive' || op === 'unarchive') && card && !params.all){
+        act(params, card, function(d){
+          card.classList.add('gone'); toast(d.message);
+          setTimeout(function(){ card.remove() }, 260);
+        });
+      } else { act(params, a); }
+      return;
+    }
     var el = e.target.closest('[data-open]');
     if(!el) return;
-    e.preventDefault(); open(el.getAttribute('data-open'));
+    e.preventDefault();
+    // "Alles"/Vollseite: Nest zeigt die Seite als eigenes Blatt (nest:page).
+    if(embedded && el.hasAttribute('data-page')){ window.parent.postMessage({type:'nest:page'}, '*'); return; }
+    open(el.getAttribute('data-open'));
   });
   // Nachladen statt fetch: eine opake Origin kann sich selbst nicht lesen.
+  // Nie mitten im Tippen oder während eine Aktion läuft.
   var idle = Date.now();
   ['pointermove','wheel','keydown','touchstart'].forEach(function(n){addEventListener(n,function(){idle=Date.now()},{passive:true})});
-  setInterval(function(){ if(Date.now()-idle > 20000 && !document.hidden){ location.reload() } }, %(reload)d);
+  setInterval(function(){
+    if(dirty || Object.keys(pending).length || document.querySelector('form[data-op]')) return;
+    if(Date.now()-idle > 20000 && !document.hidden){ location.reload() }
+  }, %(reload)d);
 })();
 """
 
@@ -467,7 +705,13 @@ def _meter(a: dict, price: float | None) -> str:
             f"<span>Wert ~{esc(format_money(fair))}</span></div></div>")
 
 
-def _card(m: Match, *, detail: bool = False, hero: bool = False) -> str:
+def _arch_btn(m: Match) -> str:
+    return (f"<span class=act role=button tabindex=0 title='Archivieren – aus der Liste nehmen' data-act=archive "
+            f"data-key='{esc(m.key)}'>{icon('archive')}</span>")
+
+
+def _card(m: Match, *, detail: bool = False, hero: bool = False, tier: str | None = None,
+          action: str | None = None, below: str = "") -> str:
     l = m.listing
     a = l.assessment or {}
     v = a.get("verdict")
@@ -477,6 +721,9 @@ def _card(m: Match, *, detail: bool = False, hero: bool = False) -> str:
            if l.image_url else f"<div class='ph src-{esc(l.source)}'>{icon('image')}</div>")
     new = f"<span class='glass new'>Neu</span>" if _is_new(m) else ""
     verdict = f"<span class='verdict v-{esc(v)}'>{esc(a.get('label') or v)}</span>" if v else ""
+    if not v and tier:
+        verdict = f"<span class='tbadge t-{esc(tier)}'>{esc(TIER_LABEL[tier])}</span>"
+    act = _arch_btn(m) if action is None else action
     drop = ""
     if l.price_before and l.price and l.price_before > l.price:
         drop = (f"<span class=was>{esc(format_money(l.price_before))}</span>"
@@ -498,9 +745,9 @@ def _card(m: Match, *, detail: bool = False, hero: bool = False) -> str:
     cls = "card" + (" deal v-" + v if deal else "") + (" hero" if hero else "")
     return (
         f"<a class='{cls}' href='{esc(l.url)}' data-open='{_b()}go/{key}' title='{esc(l.title)}'>"
-        f"<div class=media>{img}<div class=tags>{_src(l.source)}{new}</div>{verdict}</div>"
+        f"<div class=media>{img}<div class=tags>{_src(l.source)}{new}</div>{verdict}{act}</div>"
         f"<div class=info><div class=priceline><span class=price>{esc(_money(l.price))}</span>{drop}</div>"
-        f"{specs}<div class=ttl>{esc(l.title)}</div>{extra}{foot}</div></a>"
+        f"{specs}<div class=ttl>{esc(l.title)}</div>{extra}{foot}{below}</div></a>"
     )
 
 
@@ -584,7 +831,7 @@ def widget(engine: Engine, params: dict[str, str], base: str = "") -> str:
         f"<div class=brand><div class=logo>{icon('radar')}</div><div class=name>Tracker</div></div>"
         f"<div class=when><span class='dot s-{state}{' pulse' if state == 'loading' else ''}'></span>{esc(when)}</div>"
         f"<div class=chips>{''.join(chips)}</div>"
-        f"<button class=btn data-open='{_b()}?layout=page'>Alles {icon('out')}</button>"
+        f"<button class=btn data-page data-open='{_b()}?layout=page'>Alles {icon('out')}</button>"
         f"</div>{content}</div>"
     )
     return _page(body, base=base)
@@ -801,7 +1048,12 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
     except ValueError:
         limit = PAGE_SIZE
 
+    view = params.get("v") if params.get("v") in VIEWS else "uebersicht"
     everything = engine.recent_matches(limit=PAGE_SCAN, include_silent=True)
+    all_unique = _unique(everything)
+    tier_of = manage.tiers(everything)
+    counts = {t: sum(1 for m in all_unique if tier_of.get(m.key) == t) for t in TIERS}
+    nav = _nav(view, counts, engine.store.archive_count(), len(engine.parsed))
     scoped = [m for m in everything if m.search == sel] if sel else everything
     # Dieselbe Anzeige kann in mehreren Suchen stecken: im Raster nur einmal.
     seen: set[str] = set()
@@ -813,12 +1065,27 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
     srcs = "".join(
         f"<span class='pill tint s-{esc(r['state'])}'><span class=dot></span>{esc(r['label'])}</span>" for r in _source_rows())
     duo = _sources_section() + _restock_section(engine)
+    head = (f"<header class=hdr><div class=logo>{icon('radar')}</div><div><h1>Tracker</h1>"
+            f"<div class=status><span class='dot s-{state} pulse'></span>{esc(status)}</div></div>"
+            f"<span class=sp></span><div class=srcs>{srcs}</div></header>")
+    if view != "uebersicht":
+        if view in TIERS:
+            main = _tier_page(engine, view, all_unique, tier_of, params, limit)
+        elif view == "suchen":
+            main = _searches_page(engine, params)
+        else:
+            main = _archive_page(engine, params, limit)
+        body = (f"<div class=wrap>{head}{nav}{main}"
+                f"<footer>Tracker {esc(__version__)} · aktualisiert sich von selbst</footer></div>")
+        return _page(body, page=True, reload_ms=120_000, base=base)
     body = (
         "<div class=wrap>"
         f"<header class=hdr><div class=logo>{icon('radar')}</div><div><h1>Tracker</h1>"
         f"<div class=status><span class='dot s-{state} pulse'></span>{esc(status)}</div></div>"
         f"<span class=sp></span><div class=srcs>{srcs}</div></header>"
+        f"{nav}"
         f"{_kpis(engine, unique_all)}"
+        f"{_tier_overview(all_unique, tier_of)}"
         f"{_heroes(unique_all)}"
         f"{_search_cards(engine, sel)}"
         f"{_offers(engine, unique, sel, flt, order, limit)}"
@@ -827,6 +1094,285 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
         "</div>"
     )
     return _page(body, page=True, reload_ms=120_000, base=base)
+
+
+# ---------------------------------------------------------------- Seiten
+VIEWS = ("uebersicht", *TIERS, "suchen", "archiv")
+TIER_ICON = {"billig": "down", "mittel": "tag", "teuer": "up", "verdaechtig": "alert"}
+
+
+def _unique(matches: list[Match]) -> list[Match]:
+    seen: set[str] = set()
+    return [m for m in matches if not (m.key in seen or seen.add(m.key))]
+
+
+def _nav(view: str, counts: dict[str, int], archived: int, searches: int) -> str:
+    def tab(v: str, label: str, ic: str, n: int | None = None, cls: str = "") -> str:
+        badge = f"<span class=n>{n}</span>" if n is not None else ""
+        return (f"<a class='{'on' if v == view else ''} {cls}' href='{esc(_qs(layout='page', v=v if v != 'uebersicht' else ''))}'>"
+                f"{icon(ic)}{esc(label)}{badge}</a>")
+    tabs = [tab("uebersicht", "Übersicht", "home"), "<span class=gap></span>"]
+    tabs += [tab(t, TIER_LABEL[t], TIER_ICON[t], counts.get(t, 0), f"t-{t}") for t in TIERS
+             if t != "verdaechtig" or counts.get(t)]
+    tabs += ["<span class=gap></span>", tab("suchen", "Suchen", "search", searches),
+             tab("archiv", "Archiv", "archive", archived)]
+    return f"<nav class=nav><div class=tabs>{''.join(tabs)}</div></nav>"
+
+
+def _tier_overview(matches: list[Match], tier_of: dict[str, str]) -> str:
+    cards = []
+    for t in TIERS:
+        group = [m for m in matches if tier_of.get(m.key) == t]
+        if t == "verdaechtig" and not group:
+            continue
+        prices = [m.listing.price for m in group if m.listing.price]
+        span = (f"{format_money(min(prices))} – {format_money(max(prices))}" if len(prices) > 1
+                else format_money(prices[0]) if prices else "nichts drin")
+        thumbs = "".join([f"<img src='{_b()}img/{quote(m.key, safe='')}' alt='' loading=lazy>"
+                          for m in group if m.listing.image_url][:5])
+        cards.append(
+            f"<a class='tier t-{t}' href='{esc(_qs(layout='page', v=t))}'>"
+            f"<div class=top><span class='ic tint'>{icon(TIER_ICON[t])}</span>{esc(TIER_LABEL[t])}"
+            f"<span class=go>{icon('out')}</span></div>"
+            f"<div class=v>{len(group)}</div><div class=h>{esc(span)}<br>{esc(TIER_HINT[t])}</div>"
+            f"{f'<div class=thumbs>{thumbs}</div>' if thumbs else ''}</a>")
+    return (f"<section class=sec><div class=sech><h2>{icon('tag')}Preisklassen</h2>"
+            "<span class=cnt>jede Klasse hat ihre eigene Seite</span></div>"
+            f"<div class=tiers>{''.join(cards)}</div></section>")
+
+
+def _search_chips(engine: Engine, sel: str, **keep: str) -> str:
+    chips = [f"<a class='chip {'on' if not sel else ''}' href='{esc(_qs(layout='page', **keep))}'>Alle Suchen</a>"]
+    chips += [f"<a class='chip {'on' if s.name == sel else ''}' href='{esc(_qs(layout='page', s=s.name, **keep))}'>"
+              f"{esc(s.name)}</a>" for s in engine.searches]
+    return f"<div class=chips>{''.join(chips)}</div>"
+
+
+def _sorted(matches: list[Match], order: str) -> list[Match]:
+    if order == "preis":
+        return sorted(matches, key=lambda m: (m.listing.price is None, m.listing.price or 0))
+    if order == "wert":
+        def ratio(m: Match) -> float:
+            a = m.listing.assessment or {}
+            return m.listing.price / a["fair_price"] if a.get("fair_price") and m.listing.price else 9.0
+        return sorted(matches, key=ratio)
+    return matches
+
+
+def _tier_page(engine: Engine, tier: str, matches: list[Match], tier_of: dict[str, str],
+               params: dict[str, str], limit: int) -> str:
+    sel = params.get("s") or ""
+    if sel not in {s.name for s in engine.searches}:
+        sel = ""
+    order = params.get("o") if params.get("o") in ORDERS else ("preis" if tier == "billig" else "neu")
+    group = [m for m in matches if tier_of.get(m.key) == tier and (not sel or m.search == sel)]
+    group = _sorted(group, order)
+    keep = {"v": tier, "o": order}
+    seg_o = "".join(f"<a class='{'on' if k == order else ''}' href='{esc(_qs(layout='page', s=sel, v=tier, o=k))}'>{v}</a>"
+                    for k, v in ORDERS.items())
+    bulk = ""
+    if group:
+        bulk = (f"<button class='btn dng' data-act=archive-tier data-tier='{tier}' "
+                f"data-confirm='Wirklich alle {len(group)} archivieren?'>{icon('archive')}Alle archivieren</button>")
+    if group:
+        grid = "<div class=grid>" + "".join(_card(m, detail=True, tier=tier) for m in group[:limit]) + "</div>"
+    else:
+        grid = (f"<div class=nodeal><div class='ic tint t-{tier}'>{icon(TIER_ICON[tier])}</div><div>"
+                f"<b>Gerade nichts in „{esc(TIER_LABEL[tier])}“</b>Sobald etwas passt, landet es hier.</div></div>")
+    more = ""
+    if len(group) > limit:
+        more = (f"<div class=more><a class=btn href='{esc(_qs(layout='page', s=sel, n=str(min(limit + PAGE_SIZE, PAGE_MAX)), **keep))}'>"
+                f"Mehr anzeigen · noch {len(group) - limit}</a></div>")
+    rules = manage.rules(engine.store)
+    auto = ""
+    if tier == "teuer" and rules["enabled"] and rules["expensive_hours"]:
+        auto = f" Teure Angebote wandern nach {rules['expensive_hours']} h automatisch ins Archiv."
+    return (
+        f"<section class=sec><div class=phead><div class='ic tint t-{tier}'>{icon(TIER_ICON[tier])}</div>"
+        f"<div><h2>{esc(TIER_LABEL[tier])} <span class=cnt style='color:var(--t3);font-weight:550'>{len(group)}</span></h2>"
+        f"<p>{esc(TIER_HINT[tier])}.{esc(auto)} Mit {icon('archive').replace('<svg class=i', '<svg class=i style=display:inline;vertical-align:-3px;width:14px;height:14px')} "
+        "auf einer Karte nimmst du sie aus der Liste.</p></div>"
+        f"<span class=sp></span>{bulk}</div>"
+        f"<div class=toolbar>{_search_chips(engine, sel, **keep)}<div class=seg>{seg_o}</div></div>"
+        f"{grid}{more}</section>"
+    )
+
+
+SOURCE_CHOICES = ("ebay", "kleinanzeigen", "vinted", "mydealz")
+
+
+def _opt(value: str, current: str, label: str) -> str:
+    return f"<option value='{esc(value)}'{' selected' if value == current else ''}>{esc(label)}</option>"
+
+
+def _search_form(engine: Engine, edit: str | None) -> str:
+    target = next((p for p in engine.parsed if p.search is not None and p.search.name == edit), None) if edit else None
+    f = manage.fields_of(target.line) if target is not None else {}
+    title = f"„{target.search.name}“ bearbeiten" if target is not None else "Neue Suche"
+    attrs = ""
+    note = ("Tipp: Mehrere Suchbegriffe mit | trennen, dann werden alle abgefragt und die Treffer zusammengeführt.")
+    if target is not None and target.origin == "custom":
+        attrs = f" data-id='{esc(target.cid)}'"
+    elif target is not None:
+        attrs = f" data-replaces='{esc(target.search.name)}'"
+        note = ("Diese Suche steht in Nests Einstellungen. Speichern übernimmt sie als eigene Suche; "
+                "die Zeile in Nest wird dann hier ausgeblendet (Verlauf bleibt).")
+
+    def val(k: str) -> str:
+        return esc(str(f.get(k) or ""))
+
+    srcs = set(f.get("sources") or [])
+    checks = "".join(
+        f"<label class=src-{s}><input type=checkbox name=sources value={s} data-many{' checked' if s in srcs else ''}>"
+        f"<span class=dot></span>{esc(SOURCE_LABELS.get(s, s))}</label>" for s in SOURCE_CHOICES)
+    default = ", ".join(SOURCE_LABELS.get(s, s) for s in engine.settings.default_sources)
+    ev = str(f.get("evaluate") or "")
+    back = esc(_qs(layout="page", v="suchen"))
+    return (
+        f"<form class=form data-op=search-save data-back='{back}'{attrs}>"
+        f"<h3>{icon('plus' if target is None else 'edit')}{esc(title)}</h3><p class=note>{esc(note)}</p>"
+        "<div class=fg>"
+        f"<div class='f w4'><label for=f-name>Name</label><input id=f-name name=name value='{val('name')}' "
+        "placeholder='z. B. RTX 4070 günstig' maxlength=60></div>"
+        f"<div class='f w8'><label for=f-q>Wonach suchen?</label><input id=f-q name=query required value='{val('query')}' "
+        "placeholder='rtx 4070 | rtx 4070 super'></div>"
+        f"<div class='f w3'><label for=f-min>Preis ab</label><div class=unit><input id=f-min name=min inputmode=decimal "
+        f"value='{val('min')}' placeholder='0'><span>€</span></div></div>"
+        f"<div class='f w3'><label for=f-max>Preis bis</label><div class=unit><input id=f-max name=max inputmode=decimal "
+        f"value='{val('max')}' placeholder='600'><span>€</span></div></div>"
+        f"<div class='f w3'><label for=f-cond>Zustand</label><select id=f-cond name=condition>"
+        f"{_opt('', str(f.get('condition') or ''), 'Egal')}{_opt('gebraucht', str(f.get('condition') or ''), 'Gebraucht')}"
+        f"{_opt('neu', str(f.get('condition') or ''), 'Neu')}</select></div>"
+        f"<div class='f w3'><label for=f-buy>Kaufart (eBay)</label><select id=f-buy name=buying>"
+        f"{_opt('', str(f.get('buying') or ''), 'Egal')}{_opt('sofort', str(f.get('buying') or ''), 'Sofort-Kaufen')}"
+        f"{_opt('auktion', str(f.get('buying') or ''), 'Auktion')}</select></div>"
+        f"<div class='f w12'><span class=lab>Wo suchen?</span><div class=checks>{checks}</div>"
+        f"<small>Nichts angehakt = Standard ({esc(default)})</small></div>"
+        f"<div class='f w4'><label for=f-must>Muss im Titel stehen</label><input id=f-must name=must value='{val('must')}' "
+        "placeholder='32gb, ryzen'><small>alle davon, mit Komma</small></div>"
+        f"<div class='f w4'><label for=f-any>Mindestens eins davon</label><input id=f-any name=any value='{val('any')}' "
+        "placeholder='i7, ryzen 7'></div>"
+        f"<div class='f w4'><label for=f-ex>Ausschließen</label><input id=f-ex name=exclude value='{val('exclude')}' "
+        "placeholder='defekt, bastler, tausch'></div>"
+        f"<div class='f w3'><label for=f-ev>Preis bewerten</label><select id=f-ev name=evaluate>"
+        f"{_opt('', ev, 'Nein – nur Preisspanne')}{_opt('pc', ev, 'Gaming-PC (Teilewert)')}"
+        f"{_opt('gpu', ev, 'Grafikkarte (Marktwert)')}{_opt('ram', ev, 'RAM (Preis je GB)')}</select></div>"
+        f"<div class='f w3'><label for=f-deal>Nur melden bis</label><div class=unit><input id=f-deal name=deal inputmode=decimal "
+        f"value='{val('deal')}' placeholder='90'><span>%</span></div><small>vom Marktwert (mit Bewertung)</small></div>"
+        f"<div class='f w3'><label for=f-gpu>Mind. Grafikkarte</label><input id=f-gpu name=gpu value='{val('gpu')}' "
+        "placeholder='3070'></div>"
+        f"<div class='f w3'><label for=f-ram>Mind. RAM</label><div class=unit><input id=f-ram name=ram inputmode=numeric "
+        f"value='{val('ram')}' placeholder='16'><span>GB</span></div></div>"
+        f"<div class='f w3'><label for=f-plz>PLZ (Kleinanzeigen)</label><input id=f-plz name=plz inputmode=numeric maxlength=5 "
+        f"value='{val('plz')}' placeholder='{esc(engine.settings.kleinanzeigen_plz or '10115')}'></div>"
+        f"<div class='f w3'><label for=f-rad>Umkreis</label><div class=unit><input id=f-rad name=radius inputmode=numeric "
+        f"value='{val('radius')}' placeholder='{engine.settings.kleinanzeigen_radius or 50}'><span>km</span></div></div>"
+        "</div>"
+        "<details class=pro><summary>Profi: Suchzeile direkt schreiben</summary>"
+        "<div class='f w12'><textarea name=line placeholder='name:&quot;Gaming-PC&quot; gaming pc | pc rtx 400-1000 bewertung:pc "
+        "deal:0.9 -defekt @ka'></textarea><small>Wenn hier etwas steht, zählt nur diese Zeile.</small></div></details>"
+        "<div class=formfoot>"
+        f"<label class=switch><input type=checkbox name=paused{' checked' if f.get('paused') else ''}>Pausiert anlegen</label>"
+        "<span class=msg></span><span class=sp></span>"
+        f"{f'<a class=btn href={back}>Abbrechen</a>' if target is not None else ''}"
+        f"<button class='btn pri' type=submit>{icon('check')}Speichern</button></div></form>"
+    )
+
+
+def _searches_page(engine: Engine, params: dict[str, str]) -> str:
+    states = engine.store.all_search_states()
+    rows = []
+    for p in engine.parsed:
+        if p.search is None:
+            rows.append(f"<div class=srow><div class='st tint s-error'>{icon('alert')}</div><div class=mid>"
+                        f"<div class=t><b>Nicht verstanden</b></div><code>{esc(p.line)}</code>"
+                        f"<div class=meta>{esc(p.error)}</div></div></div>")
+            continue
+        s = p.search
+        st = _search_state(engine, s.name)
+        row = states.get(s.name)
+        own = p.origin == "custom"
+        price = ("bis " + format_money(s.max_price) if s.max_price is not None and s.min_price is None else
+                 f"{format_money(s.min_price)} – {format_money(s.max_price)}" if s.max_price is not None else
+                 "ab " + format_money(s.min_price) if s.min_price is not None else "")
+        meta = "".join(_src(x, glass=False) for x in s.sources)
+        if price:
+            meta += f"<span class='pill tint s-paused'>{esc(price)}</span>"
+        if s.evaluate:
+            meta += f"<span class='pill tint v-gut'>Bewertung {esc(s.evaluate.upper())}</span>"
+        tracked = engine.store.count_tracked(s.name)
+        meta += f"<span>{tracked} gemerkt · geprüft {esc(ago(parse_iso(row['last_run'])) if row and row['last_run'] else '–')}</span>"
+        name = esc(s.name)
+        btns = (f"<a class='btn sm' href='{esc(_qs(layout='page', v='suchen', edit=s.name))}#form'>{icon('edit')}Bearbeiten</a>"
+                f"<button class='btn sm' data-act=search-toggle data-name='{name}'>"
+                f"{icon('play' if not s.enabled else 'pause')}{'Fortsetzen' if not s.enabled else 'Pausieren'}</button>"
+                f"<button class='btn sm dng' data-act=search-delete data-name='{name}' data-confirm='Wirklich entfernen?'>"
+                f"{icon('trash')}Entfernen</button>")
+        rows.append(
+            f"<div class='srow{' off' if not s.enabled else ''}'><div class='st tint s-{st}'>{icon('search')}</div>"
+            f"<div class=mid><div class=t><b>{name}</b><span class='origin{' own' if own else ''}'>"
+            f"{'Eigene' if own else 'Nest-Einstellung'}</span></div>"
+            f"<code>{esc(p.line)}</code><div class=meta>{meta}</div></div><div class=btns>{btns}</div></div>")
+    hidden = engine.hidden_searches
+    hid = ""
+    if hidden:
+        items = "".join(
+            f"<div class='srow off'><div class='st tint s-paused'>{icon('eye')}</div><div class=mid><div class=t><b>{esc(n)}</b>"
+            "<span class=origin>ausgeblendet</span></div><div class=meta>Steht in Nests Einstellungen, hier ausgeblendet "
+            "oder als eigene Suche übernommen.</div></div><div class=btns>"
+            f"<button class='btn sm' data-act=search-restore data-name='{esc(n)}'>{icon('undo')}Zurückholen</button></div></div>"
+            for n in hidden)
+        hid = (f"<section class=sec><div class=sech><h2>{icon('eye')}Ausgeblendet</h2><span class=cnt>{len(hidden)}</span></div>"
+               f"<div class=slist>{items}</div></section>")
+    edit = params.get("edit")
+    return (
+        f"<section class=sec id=form>{_search_form(engine, edit)}</section>"
+        f"<section class=sec><div class=sech><h2>{icon('search')}Alle Suchen</h2><span class=cnt>{len(engine.parsed)}</span>"
+        f"<span class=sp></span></div><div class=slist>{''.join(rows) or '<div class=hint>Noch keine Suche – oben eine anlegen.</div>'}"
+        f"</div></section>{hid}"
+    )
+
+
+def _archive_page(engine: Engine, params: dict[str, str], limit: int) -> str:
+    r = manage.rules(engine.store)
+    rules = (
+        "<form class=form data-op=rules>"
+        f"<h3>{icon('wand')}Automatisch aufräumen</h3>"
+        "<p class=note>Damit die Liste nicht nervt: Angebote wandern von selbst ins Archiv. Gelöscht wird nichts, "
+        "und ein Klick holt sie zurück.</p>"
+        "<div class=rules>"
+        f"<label class=switch><input type=checkbox name=enabled{' checked' if r['enabled'] else ''}>Automatisch archivieren</label>"
+        f"<div class=f><label>Älter als</label><div class=unit><input name=max_age_days inputmode=numeric value='{r['max_age_days']}'>"
+        "<span>Tage</span></div></div>"
+        f"<div class=f><label>„Teuer“ nach</label><div class=unit><input name=expensive_hours inputmode=numeric "
+        f"value='{r['expensive_hours']}'><span>h</span></div><small>0 = nie</small></div>"
+        f"<div class=f><label>Nicht mehr online seit</label><div class=unit><input name=gone_hours inputmode=numeric "
+        f"value='{r['gone_hours']}'><span>h</span></div><small>vermutlich verkauft</small></div>"
+        f"<label class=switch><input type=checkbox name=mute_archived{' checked' if r['mute_archived'] else ''}>"
+        "Von Hand Archiviertes nie wieder melden</label>"
+        "</div><div class=formfoot><span class=msg></span><span class=sp></span>"
+        f"<button class='btn pri' type=submit>{icon('check')}Regeln speichern</button></div></form>"
+    )
+    items = engine.recent_matches(limit=PAGE_SCAN, include_silent=True, archived=True)
+    items = _unique(items)
+    cards = []
+    for m in items[:limit]:
+        restore = (f"<span class=act role=button tabindex=0 title='Zurückholen' data-act=unarchive "
+                   f"data-key='{esc(m.key)}'>{icon('undo')}</span>")
+        why = (f"<div class=why>{icon('archive')}<span>{esc(m.archived_reason or 'archiviert')} · "
+               f"{esc(ago(m.archived_at))}</span></div>")
+        cards.append(_card(m, action=restore, below=why))
+    if cards:
+        grid = "<div class=grid>" + "".join(cards) + "</div>"
+        bulk = (f"<button class=btn data-act=unarchive data-all data-confirm='Alle {len(items)} zurückholen?'>"
+                f"{icon('undo')}Alle zurückholen</button>")
+    else:
+        grid = (f"<div class=nodeal><div class='ic tint s-paused'>{icon('archive')}</div><div><b>Archiv ist leer</b>"
+                "Mit dem Archiv-Knopf auf einer Karte nimmst du ein Angebot aus der Liste.</div></div>")
+        bulk = ""
+    return (f"<section class=sec>{rules}</section>"
+            f"<section class=sec><div class=sech><h2>{icon('archive')}Archiv</h2><span class=cnt>{len(items)}</span>"
+            f"<span class=sp></span>{bulk}</div>{grid}</section>")
 
 
 GO_PREFIXES = ("https://www.ebay.", "https://www.kleinanzeigen.de/", "https://www.vinted.", "https://www.mydealz.de/")

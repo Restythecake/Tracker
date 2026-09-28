@@ -76,6 +76,9 @@ MANIFEST = {
     ],
     "actions": [
         {"id": "check-now", "name": "Jetzt prüfen", "title": "Jetzt prüfen"},
+        # Nur für die eigene Seite (nest:action): Suchen anlegen/ändern, archivieren.
+        # Kein Knopf in Nest, und nie "danger" -- ein Frame hat keine Rückfrage.
+        {"id": "edit", "name": "Seite bearbeiten", "frame": True},
         {"id": "test-notify", "name": "Testbenachrichtigung", "title": "Testbenachrichtigung senden"},
         {"id": "reset", "name": "Verlauf zurücksetzen", "title": "Verlauf zurücksetzen", "danger": True,
          "confirm": "Alle gemerkten Angebote vergessen? Der nächste Lauf meldet nichts, er merkt sich nur neu."},

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from . import frame
+from . import frame, manage
 from .engine import Engine
 from .manifest import MANIFEST
 from .widgets import WIDGETS
@@ -228,7 +228,7 @@ def make_handler(engine: Engine, images: ImageCache):
                         return self._json(404, {"error": "unknown widget"})
                     return self._json(200, build(engine, body.get("size")))
                 if m := re.fullmatch(r"/nest/v1/actions/([A-Za-z][\w-]*)", path):
-                    return self._json(200, self._action(m.group(1)))
+                    return self._json(200, self._action(m.group(1), body if isinstance(body, dict) else {}))
                 if path == "/nest/v1/settings/changed":
                     engine.update_settings(body.get("settings"))
                     return self._json(200, {"ok": True})
@@ -241,7 +241,11 @@ def make_handler(engine: Engine, images: ImageCache):
                 log.exception("POST %s fehlgeschlagen", path)
                 return self._json(500, {"error": "internal"})
 
-        def _action(self, action: str) -> dict[str, Any]:
+        def _action(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
+            if action == "edit":
+                # Frame-Aktion der Seite (Suchen, Archiv); Nest ruft sie im Namen
+                # des angemeldeten Benutzers auf, der Frame selbst kann nicht schreiben.
+                return manage.handle(engine, params)
             if action == "check-now":
                 if not engine.active_searches:
                     return {"ok": False, "message": "Keine aktive Suche – erst in den Einstellungen anlegen."}

@@ -63,6 +63,9 @@ class ParsedSearch:
     line: str
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # Herkunft: "nest" (Nests Einstellungen) oder "custom" (auf der Seite angelegt, id = cid)
+    origin: str = "nest"
+    cid: str | None = None
 
 
 def _num(text: str) -> float:
