@@ -85,6 +85,8 @@ aus. Seit 0.7 eskaliert der Abruf (`ebay_tracker/sources/fetch.py`):
    Session für den ganzen Prozess, ein Tab, ohne Bilder/Fonts/CSS; wärmt je Host einmal die
    Startseite an (Akamai setzt dabei seine Cookies), schließt sich nach 5 min Leerlauf.
 3. Erst wenn **beide** scheitern, gilt die Quelle als gesperrt und pausiert 30 min.
+4. Nach einer Rettung bleibt die Quelle **eine Stunde direkt beim Browser**: jedes weitere 403 auf
+   Stufe 1 verschlechtert bei Akamai nur den Ruf der IP.
 
 **Weniger Anfragen statt mehr Tarnung**: Die eigentliche Ursache der Sperren war die Menge –
 jede Alternative (`a | b | c`) war eine eigene eBay-Anfrage, ~20 alle 10 Minuten. Der Scraper

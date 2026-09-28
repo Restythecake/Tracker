@@ -344,3 +344,18 @@ def test_browser_rewarms_once_when_blocked_mid_session():
     (s,) = FakeSession.instances
     assert s.fetched == ["https://www.ebay.de/", "https://www.ebay.de/sch/i.html?a=1",
                          "https://www.ebay.de/", "https://www.ebay.de/sch/i.html?a=1"]
+
+
+def test_after_rescue_auto_goes_straight_to_browser_for_a_while(monkeypatch):
+    """Jedes weitere 403 auf Stufe 1 schadet nur dem Ruf der IP: nach einer Rettung direkt Browser."""
+    import ebay_tracker.sources.fetch as fetch_mod
+    clock = [1000.0]
+    monkeypatch.setattr(fetch_mod.time, "monotonic", lambda: clock[0])
+    ok = lambda: Page(200, "https://www.ebay.de/sch/i.html", RESULTS.encode(), via="browser")  # noqa: E731
+    b = FakeBrowser(ok(), ok())
+    f = fetcher(http=[Resp(403, "Access Denied"), Resp(200, RESULTS)], browser=b)
+    f.get("https://www.ebay.de/sch/i.html")
+    assert f.get("https://www.ebay.de/sch/i.html").via == "browser"  # ohne Stufe 1
+    assert len(b.urls) == 2 and len(f.session.responses) == 1
+    clock[0] += Fetcher.STICKY_SECONDS + 1
+    assert f.get("https://www.ebay.de/sch/i.html").via == "http"  # danach wieder leicht

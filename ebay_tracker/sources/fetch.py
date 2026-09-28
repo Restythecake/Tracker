@@ -267,6 +267,8 @@ class Fetcher:
     ``stealth`` nur Browser (fällt auf Stufe 1 zurück, wenn keiner da ist)
     """
 
+    STICKY_SECONDS = 3600
+
     def __init__(self, source: str, label: str, *, mode: str = "auto", session=None,
                  accept_language: str = "de-DE,de;q=0.9", browser: Browser | None = None,
                  stats: FetchStats | None = None):
@@ -278,6 +280,9 @@ class Fetcher:
         self.session = session if session is not None else new_session(accept_language)
         self.browser = browser if browser is not None else BROWSER
         self.stats = stats if stats is not None else STATS
+        # Nach einer Rettung eine Weile direkt per Browser: jedes weitere 403 auf
+        # Stufe 1 verschlechtert bei Akamai nur den Ruf unserer IP.
+        self.sticky_until = 0.0
 
     def get(self, url: str, params: dict | None = None, timeout: float = 30) -> Page:
         """Holt eine Seite. Wirft ``SourceError(blocked=True)``, wenn alle Stufen gesperrt sind.
@@ -287,7 +292,8 @@ class Fetcher:
         if params:
             url = f"{url}{'&' if '?' in url else '?'}{urlencode(params)}"
         self.stats.bump(self.source, requests=1)
-        use_browser = self.mode == "stealth" and self.browser.available
+        use_browser = (self.mode == "stealth" or (self.mode == "auto" and time.monotonic() < self.sticky_until)) \
+            and self.browser.available
         if not use_browser:
             page = self._http(url, timeout)
             reason = blocked_reason(page.status, page.url, page.text)
@@ -307,7 +313,13 @@ class Fetcher:
                 self.stats.bump(self.source, blocked=1)
                 raise self._blocked(f"{reason}, Browser: {exc}") from exc
         else:
-            page = self._browser(url)
+            try:
+                page = self._browser(url)
+            except SourceError:
+                if self.mode == "stealth":
+                    raise
+                self.sticky_until = 0.0  # Browser hakt: zurück zu Stufe 1, beim nächsten Mal
+                raise
         reason2 = blocked_reason(page.status, page.url, page.text)
         if reason2 is not None:
             self.stats.bump(self.source, blocked=1)
@@ -316,7 +328,9 @@ class Fetcher:
             self.stats.bump(self.source, browser_ok=1)
         else:
             self.stats.bump(self.source, rescued=1)
-            log.info("%s: per Browser gerettet (%s)", self.label, page.status)
+            self.sticky_until = time.monotonic() + self.STICKY_SECONDS
+            log.info("%s: per Browser gerettet (%s) – %d min direkt per Browser",
+                     self.label, page.status, self.STICKY_SECONDS // 60)
         return page
 
     def _http(self, url: str, timeout: float) -> Page:
