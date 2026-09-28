@@ -259,6 +259,8 @@ def handle(engine: Any, params: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "message": str(exc) or "Ungültige Eingabe", "level": "error"}
     if message is None:
         return {"ok": False, "message": f"Unbekannte Aktion '{op}'", "level": "error"}
+    if isinstance(message, dict):  # Op liefert schon eine fertige Antwort (z. B. manual)
+        return message
     return {"ok": True, "message": message, "level": "success", "refresh": ["gallery", "searches", "overview"]}
 
 
@@ -408,7 +410,25 @@ def _rules(engine: Any, p: dict[str, Any]) -> str:
     return "Regeln gespeichert" + (f" – {n} Angebote gleich archiviert" if n else "")
 
 
+def _manual(engine: Any, p: dict[str, Any]) -> dict[str, Any]:
+    from . import manual
+    if str(p.get("op2") or "") == "clear":
+        manual.reset(engine)
+        return {"ok": True, "message": "Manuelle Suche verworfen", "level": "success",
+                "refresh": ["gallery", "searches", "overview"]}
+    return manual.start(engine, str(p.get("line") or ""), sources=p.get("sources") or None)
+
+
+def _manual_save(engine: Any, p: dict[str, Any]) -> str:
+    """„Als Suche speichern": die Zeile der letzten Manuellen Suche wird echt."""
+    line = str(p.get("line") or "")
+    if not line:
+        raise EditError("Kein Suchergebnis zum Speichern")
+    return _save(engine, {"fields": {"line": line}})
+
+
 _OPS = {
     "search-save": _save, "search-toggle": _toggle, "search-delete": _delete, "search-restore": _restore,
     "archive": _archive, "unarchive": _unarchive, "archive-tier": _archive_tier, "rules": _rules,
+    "manual": _manual, "manual-save": _manual_save,
 }

@@ -35,7 +35,7 @@ from ebay_tracker.sources.fetch import STATS
 from . import __version__
 
 from .engine import Engine
-from . import manage
+from . import manage, manual
 from .manage import TIER_HINT, TIER_LABEL, TIERS
 from .store import Match, now, parse_iso
 from .widgets import ago, source_checks, until
@@ -430,6 +430,22 @@ details.pro .f{margin-top:12px}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 .toast.err{border-color:color-mix(in srgb,var(--err) 50%,var(--b2));color:var(--err)}
 
+/* ---------------- Suchleiste ---------------- */
+.bar{display:flex;gap:10px;align-items:center;flex:1;min-width:260px}
+.bar form{display:flex;gap:8px;align-items:center;flex:1;min-width:0}
+.bar .inp{flex:1;min-width:0;position:relative;display:flex;align-items:center}
+.bar input{font:inherit;font-size:14px;color:var(--t1);background:var(--surface);border:1px solid var(--b1);
+  border-radius:999px;height:42px;padding:0 40px 0 16px;outline:none;width:100%;min-width:0;
+  transition:border-color .15s,box-shadow .15s}
+.bar .inp svg.i{position:absolute;right:15px;width:15px;height:15px;color:var(--t3);pointer-events:none}
+.bar input:focus{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 22%,transparent)}
+.bar .btn{height:42px;border-radius:999px}
+.bar .btn svg.i{width:15px;height:15px}
+.runbox{display:flex;align-items:center;gap:12px;padding:14px 18px;border-radius:var(--r);background:var(--surface);
+  border:1px solid var(--b1);box-shadow:var(--sh1);color:var(--t2);font-size:13.5px;flex-wrap:wrap}
+.runbox .dot{width:10px;height:10px}
+.runbox code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--t3);word-break:break-all}
+@media (max-width:760px){.bar form{flex-wrap:wrap}}
 @media (max-width:1100px){.tiers{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:760px){.f,.f.w4,.f.w3,.f.w8{grid-column:span 12}.srow{grid-template-columns:auto minmax(0,1fr)}
   .srow .btns{grid-column:1 / -1;justify-content:flex-start}.form{padding:20px}}
@@ -502,6 +518,7 @@ SOURCE_SHORT = {"ebay": "eB", "kleinanzeigen": "KA", "vinted": "Vi", "mydealz": 
 JS = """
 (function(){
   var NEST = %(nest)s, BASE = %(base)s, root = document.documentElement;
+  var JSURL = location.protocol + '//' + location.host + BASE;
   var embedded = window.parent !== window;
   // Absolute Adresse dieser Oberfläche: Subdomain-Form ohne Basispfad, im
   // Pfad-Modus Nests Origin + Basispfad. Alle relativen Pfade laufen darüber.
@@ -584,6 +601,22 @@ JS = """
     var form = e.target.closest('form[data-op]'); if(!form) return;
     e.preventDefault();
     var params = {op: form.getAttribute('data-op')}, f = fields(form);
+    if(params.op === 'manual'){
+      // Manuelle Suche: Aktion schickt uns auf die Suche-Seite, die den Lauf zeigt.
+      var q = (f.line || '').trim(); if(!q) return;
+      var here = document.querySelector('.runbox .dot.s-loading');
+      if(here){ toast('Eine manuelle Suche läuft schon', true); return; }
+      act(params, form, function(d){
+        toast(d.message || 'Läuft'); dirty = false;
+        setTimeout(function(){ location.href = JSURL + '?layout=page&v=suche' }, 400);
+      });
+      return;
+    }
+    if(params.op === 'manual-save'){
+      act(params, form, function(d){ dirty = false; toast(d.message || 'Gespeichert');
+        setTimeout(function(){ location.href = JSURL + '?layout=page&v=suchen' }, 500); });
+      return;
+    }
     if(params.op === 'rules'){ params.rules = f; }
     else { params.fields = f; params.id = form.getAttribute('data-id') || ''; params.replaces = form.getAttribute('data-replaces') || ''; }
     act(params, form, function(d){
@@ -1067,17 +1100,19 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
     duo = _sources_section() + _restock_section(engine)
     head = (f"<header class=hdr><div class=logo>{icon('radar')}</div><div><h1>Tracker</h1>"
             f"<div class=status><span class='dot s-{state} pulse'></span>{esc(status)}</div></div>"
-            f"<span class=sp></span><div class=srcs>{srcs}</div></header>")
+            f"<span class=sp></span>{_searchbar(view)}<div class=srcs>{srcs}</div></header>")
     if view != "uebersicht":
         if view in TIERS:
             main = _tier_page(engine, view, all_unique, tier_of, params, limit)
+        elif view == "suche":
+            main = _manual_page(engine, params, limit)
         elif view == "suchen":
             main = _searches_page(engine, params)
         else:
             main = _archive_page(engine, params, limit)
         body = (f"<div class=wrap>{head}{nav}{main}"
                 f"<footer>Tracker {esc(__version__)} · aktualisiert sich von selbst</footer></div>")
-        return _page(body, page=True, reload_ms=120_000, base=base)
+        return _page(body, page=True, reload_ms=3_000 if view == "suche" and manual.state_of(engine).get("current", {}).get("status") == "running" else 120_000, base=base)
     body = (
         "<div class=wrap>"
         f"<header class=hdr><div class=logo>{icon('radar')}</div><div><h1>Tracker</h1>"
@@ -1097,13 +1132,23 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
 
 
 # ---------------------------------------------------------------- Seiten
-VIEWS = ("uebersicht", *TIERS, "suchen", "archiv")
+VIEWS = ("uebersicht", *TIERS, "suche", "suchen", "archiv")
 TIER_ICON = {"billig": "down", "mittel": "tag", "teuer": "up", "verdaechtig": "alert"}
 
 
 def _unique(matches: list[Match]) -> list[Match]:
     seen: set[str] = set()
     return [m for m in matches if not (m.key in seen or seen.add(m.key))]
+
+
+def _searchbar(view: str) -> str:
+    """Die Suchleiste im Kopf: Enter oder Knopf startet eine Manuelle Suche über alle Quellen."""
+    return (
+        f"<div class=bar><form data-op=manual><div class=inp>"
+        f"<input name=line placeholder='z. B. 4090 – überall suchen' aria-label='Manuelle Suche' "
+        f"autocomplete=off spellcheck=false value='' data-line>{icon('search')}</div>"
+        f"<button class='btn pri' type=submit title='Einmalig über alle Quellen suchen'>"
+        f"{icon('search')}Finden</button></form></div>")
 
 
 def _nav(view: str, counts: dict[str, int], archived: int, searches: int) -> str:
@@ -1114,7 +1159,8 @@ def _nav(view: str, counts: dict[str, int], archived: int, searches: int) -> str
     tabs = [tab("uebersicht", "Übersicht", "home"), "<span class=gap></span>"]
     tabs += [tab(t, TIER_LABEL[t], TIER_ICON[t], counts.get(t, 0), f"t-{t}") for t in TIERS
              if t != "verdaechtig" or counts.get(t)]
-    tabs += ["<span class=gap></span>", tab("suchen", "Suchen", "search", searches),
+    tabs += ["<span class=gap></span>", tab("suche", "Suche", "search"),
+             tab("suchen", "Suchen", "search", searches),
              tab("archiv", "Archiv", "archive", archived)]
     return f"<nav class=nav><div class=tabs>{''.join(tabs)}</div></nav>"
 
@@ -1331,6 +1377,59 @@ def _searches_page(engine: Engine, params: dict[str, str]) -> str:
         f"<span class=sp></span></div><div class=slist>{''.join(rows) or '<div class=hint>Noch keine Suche – oben eine anlegen.</div>'}"
         f"</div></section>{hid}"
     )
+
+
+def _manual_page(engine: Engine, params: dict[str, str], limit: int) -> str:
+    """Die Suche-Seite: Leiste, laufender Lauf mit Quelle-Stand, Ergebnisse als Karten."""
+    st = manual.state_of(engine)
+    run = st.get("current") or {}
+    line = str(params.get("q") or st.get("line") or "")
+    name = run.get("name") or st.get("name") or ""
+    head = (
+        f"<div class=phead><div class='ic tint v-gut'>{icon('search')}</div>"
+        "<div><h2>Manuelle Suche <span class=cnt style='color:var(--t3);font-weight:550'>einmalig, über alle Quellen</span></h2>"
+        "<p>Sucht jetzt einmal überall – ohne dauerhafte Beobachtung und ohne Meldung. Gefällt dir, "
+        "was sie findet? Unten „Als Suche speichern“ – dann beobachtet der Tracker das ab jetzt laufend.</p></div></div>"
+    )
+    runbox = ""
+    if run.get("status") == "running":
+        runbox = (f"<div class=runbox><span class='dot s-loading pulse'></span><b>Sucht gerade „{esc(run.get('name') or '')}“</b>"
+                  f"<code>{esc(run.get('line') or '')}</code><span class=sp></span>"
+                  "<span class=cnt>Diese Seite aktualisiert sich von selbst …</span></div>")
+    elif run.get("status") == "error":
+        runbox = (f"<div class=runbox><span class='dot s-error'></span><b>Suche fehlgeschlagen</b>"
+                  f"<span>{esc(run.get('error') or '')}</span></div>")
+    if run and run.get("status") != "running":
+        bits = [f"<span class='pill tint s-ok'>{esc(SOURCE_LABELS.get(k.replace(' (Fehler)',''), k.replace(' (Fehler)','')))}"
+                f"{'!' if '(Fehler)' in k else ''} · {esc(v)}</span>" for k, v in (run.get("per_source") or {}).items()]
+        runbox += (f"<div class=runbox><span class='dot s-ok'></span><b>„{esc(name)}“ beendet</b>{''.join(bits)}"
+                   f"<span class=sp></span>"
+                   f"<button class='btn' data-act=manual data-op2=clear>{icon('trash')}Verwerfen</button>"
+                   f"<form data-op=manual-save style='display:contents'>"
+                   f"<input type=hidden name=line value='{esc(run.get('line') or '')}'>"
+                   f"<button class='btn pri' type=submit>{icon('plus')}Als Suche speichern</button></form></div>")
+    listing_view = manual.results_of(engine, st)
+    seen: set[str] = set()
+    uniq = [m for m in (Match(search=name, key=l.key, first_seen=now(), notified=0, silent=0, listing=l)
+                        for l in listing_view) if not (m.key in seen or seen.add(m.key))]
+    if uniq:
+        shown = uniq[:limit]
+        grid = "<div class=grid>" + "".join(_card(m, detail=True) for m in shown) + "</div>"
+        more = (f"<div class=more><a class=btn href='{esc(_qs(layout='page', v='suche', n=str(min(limit + PAGE_SIZE, PAGE_MAX))))}'>"
+                f"Mehr anzeigen · noch {len(uniq) - limit}</a></div>") if len(uniq) > limit else ""
+    else:
+        grid = (f"<div class=nodeal><div class='ic tint v-gut'>{icon('search')}</div><div>"
+                + ("<b>Suche läuft …</b>In ein paar Sekunden steht sie hier. Einfach warten, die Seite lädt von selbst."
+                   if run.get("status") == "running" else
+                   "<b>Kein Ergebnis</b>Oben in der Leiste nach etwas anderem suchen – oder einen der Suchvorschläge unten nehmen.</div>")
+                + "</div></div>")
+        more = ""
+    history = st.get("history") or []
+    chips = "".join(
+        f"<a class=chip href='{esc(_qs(layout='page', v='suche', q=h.get('line') or ''))}'>{esc(h.get('name') or h.get('query') or '')}</a>"
+        for h in history[:8])
+    hist = f"<div class=toolbar><div class=chips>{chips}</div></div>" if chips else ""
+    return (f"<section class=sec>{head}{runbox}</section><section class=sec>{grid}{more}</section>{hist}")
 
 
 def _archive_page(engine: Engine, params: dict[str, str], limit: int) -> str:

@@ -6,7 +6,7 @@ from datetime import timedelta
 import pytest
 
 from ebay_tracker.sources import MultiSource
-from nest_plugin import frame, manage
+from nest_plugin import frame, manage, manual
 from nest_plugin.dsl import parse_line
 from nest_plugin.engine import Engine
 from nest_plugin.manifest import MANIFEST
@@ -209,3 +209,78 @@ def test_edit_form_prefills_nest_search_as_takeover(rig):
     engine, _, _ = rig
     html = frame.page(engine, {"v": "suchen", "edit": "Thinkpad"})
     assert "data-replaces='Thinkpad'" in html and "value='600'" in html
+
+
+# ------------------------------------------------------------------ manuelle Suche
+def manual_edit(engine, **params):
+    return manage.handle(engine, params)
+
+
+def test_manual_search_runs_and_saves(rig):
+    engine, ebay, _ = rig
+    ebay.items = [item("ebay", i, price=p) for i, p in enumerate([450, 900, 300, 50], start=1)]
+    r = manual_edit(engine, op="manual", line="4090 max:800")
+    assert r["ok"], r
+    engine.trigger()  # der Thread braucht ein Ende: FakeSource ist sofort fertig
+    deadline = __import__("time").time() + 2
+    st = manual.state_of(engine)
+    while st.get("current", {}).get("status") == "running" and __import__("time").time() < deadline:
+        __import__("time").sleep(0.02)
+        st = manual.state_of(engine)
+    run = st["current"]
+    assert run["status"] == "done" and run["query"] == "4090" and run["kept"] == 3  # 450/300/50
+    assert "ebay" in run["per_source"] and "50 gefunden" not in run["per_source"]["ebay"]
+    keys = st["results"]
+    assert keys == ["ebay:4", "ebay:3", "ebay:1"]  # billigste zuerst
+    # Ergebnisse als Karten, ohne Archive-Konflikt
+    from nest_plugin import frame
+    html = frame.page(engine, {"v": "suche"})
+    assert "ebay:4" in html or "450" in html
+    # Als echte Suche speichern
+    assert manual_edit(engine, op="manual-save", line=run["line"])["ok"]
+    names = [(p.search.name, p.origin) for p in engine.parsed]
+    assert names[-1][1] == "custom" and "4090" in names[-1][0]
+
+
+def test_manual_search_runs_once_at_a_time(rig):
+    import threading, time
+    engine, ebay, _ = rig
+
+    class Blocking(FakeSource):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+
+        def search(self, s):
+            self.gate.wait(2)
+            return list(reversed(self.items))
+
+    blocker = Blocking()
+    engine.source.sources["ebay"] = blocker
+    assert manual_edit(engine, op="manual", line="4090")["ok"]
+    r2 = manual_edit(engine, op="manual", line="3080")
+    assert r2["ok"] is False and "läuft schon" in r2["message"]
+    blocker.gate.set()
+    for _ in range(100):
+        if manual.state_of(engine).get("current", {}).get("status") != "running":
+            break
+        time.sleep(0.02)
+    assert manual_edit(engine, op="manual", line="3080")["ok"]
+    # leere Zeile
+    assert manual_edit(engine, op="manual", line="")["ok"] is False
+    # keine Suchbegriffe
+    assert manual_edit(engine, op="manual", line='name:"x"')["ok"] is False
+
+
+def test_manual_clear(rig):
+    engine, ebay, _ = rig
+    manual_edit(engine, op="manual", line="4090")
+    engine.trigger()
+    import time
+    for _ in range(100):
+        if manual.state_of(engine).get("current", {}).get("status") != "running":
+            break
+        time.sleep(0.02)
+    assert manual_edit(engine, op="manual", op2="clear")["ok"]
+    assert manual.state_of(engine).get("current") is None
+    assert manual.state_of(engine).get("history")

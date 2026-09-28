@@ -70,6 +70,10 @@ Container schreiben (`apply-token`). Danach:
   gesehen = vermutlich verkauft; taucht es wieder auf, kommt es zurück). Von Hand Archiviertes meldet nie wieder.
   Geschrieben wird über die Frame-Aktion `edit` (`"frame": true`), die Nest per `nest:action` unter dem
   angemeldeten Benutzer auslöst – der Frame selbst bleibt read-only. Braucht Nest ≥ 6b6e570.
+- **Manuelle Suche** (ab 0.9.1, `nest_plugin/manual.py`): Suchleiste im Kopf. Enter startet einmalig über alle
+  eingerichteten Quellen, im Hintergrund (Thread), ohne Beobachtung und ohne Meldung. Die Seite *Suche* zeigt
+  den Lauf live (aktualisiert sich alle 3 s, bis er fertig ist), dann die Treffer billigste zuerst; „Als Suche
+  speichern" macht daraus eine echte (dauerhaft beobachtete) Suche. Zuletzt 5 Suchen bleiben als Chips aufrufbar.
 - **Aktionen** auf der Plugin-Seite: *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
 - **Push**: jeder neue Treffer einzeln (Tippen öffnet das Angebot), ab `max_notifications` pro Lauf
   eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein
