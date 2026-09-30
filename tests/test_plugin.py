@@ -406,3 +406,16 @@ def test_stored_matches_are_rechecked_with_current_rules(rig):
     engine.run_once()
     keys = {m.key for m in engine.store.recent_matches(limit=10, include_silent=True)}
     assert keys == {"ebay:1"}
+
+
+# ---------------------------------------------------------------- Pfad-Modus
+def test_frame_base_accepts_nests_full_mount():
+    """Nest schickt den vollen Mount; wird er verworfen, zeigt jeder Link auf
+    `/` -- Nests Startseite hinter Authelia, im Frame "Verbindung abgelehnt"."""
+    from nest_plugin.frame import frame_base
+
+    h = "X-Nest-Frame-Base"
+    assert frame_base({h: "/plugins/frame/arthur-tracker/"}) == "/plugins/frame/arthur-tracker/"
+    assert frame_base({h: "/arthur-tracker/"}) == "/arthur-tracker/"
+    for bad in ("", "/", "//", "/plugins/frame/", "/x/y/", "/Evil/", "plugins/frame/a/", "/plugins/frame/a/b/"):
+        assert frame_base({h: bad}) == "", bad

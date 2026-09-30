@@ -24,6 +24,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import threading
 from datetime import timedelta
 from typing import Any
@@ -48,17 +49,27 @@ NEST_ORIGIN = os.environ.get("NEST_DASHBOARD_ORIGIN", "https://nest.mini.shibusa
 # Header weg und die Seite bedient sich selbst. Ohne Header ist der Basis-
 # pfad leer -- alles bleibt bei den absoluten Pfaden der Subdomain-Form.
 FRAME_BASE_HEADER = "X-Nest-Frame-Base"
+# Nests gemeinsamer Präfix für Frames im Pfad-Modus, ohne Slashes an den Enden.
+FRAME_PATH_PREFIX = "plugins/frame/"
+_LABEL_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
 def frame_base(headers: Any) -> str:
     """Der Basispfad der Oberfläche: "" auf der Subdomain, sonst der Mount
-    unter Nests Host -- `/arthur-tracker/`, mit führendem und schließendem
-    Slash (Nest sendet den Mount, nicht den gemeinsamen /plugins/frame/
-    Präfix; die relativen URLs brauchen nur den Teil, der zwischen Host und
-    eigenem Pfad liegt). Fremde oder falsch geformte Werte werden verworfen:
-    der Header kommt von Nest, nicht vom Browser -- und Nest streicht einen
-    vom Browser mitgeschickten gleichnamigen Header vorher, also ist das
-    hier die dritte Sperre, weil sie nichts kostet."""
+    unter Nests Host -- `/plugins/frame/arthur-tracker/`, mit führendem und
+    schließendem Slash.
+
+    Nest schickt den *vollen* Mount, Präfix eingeschlossen: der Browser löst
+    die pfad-absoluten Links dieser Seite gegen die Wurzel von Nests Host auf,
+    und dort liegt das Dashboard (hinter Authelia). Früher erwartete diese
+    Funktion nur `/<label>/`, verwarf Nests echten Wert -- und jeder Link
+    zeigte auf `/?layout=page`, also auf die Nest-Startseite. Im Frame endete
+    das in Authelias Login, das sich nicht einbetten lässt ("Verbindung
+    abgelehnt"). Die kurze Form bleibt aus Kompatibilität erlaubt.
+
+    Fremde oder falsch geformte Werte werden verworfen: der Header kommt von
+    Nest, nicht vom Browser -- Nest streicht einen vom Browser mitgeschickten
+    gleichnamigen Header vorher, das hier ist die dritte Sperre."""
     raw = ""
     try:
         raw = headers.get(FRAME_BASE_HEADER, "") or ""
@@ -66,8 +77,10 @@ def frame_base(headers: Any) -> str:
         return ""
     if not raw.startswith("/") or not raw.endswith("/"):
         return ""
-    label = raw[1:-1]
-    if not label or "/" in label:
+    inner = raw[1:-1]
+    if inner.startswith(FRAME_PATH_PREFIX):
+        inner = inner[len(FRAME_PATH_PREFIX):]
+    if not inner or "/" in inner or not _LABEL_RE.fullmatch(inner):
         return ""
     return raw
 
