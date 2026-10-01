@@ -1,14 +1,14 @@
-"""HTTP-Seite des Plugins: Nests Vertrag (§4.1) plus die Frame-Oberfläche.
+"""HTTP-Seite des Plugins: Nests Vertrag plus die eigene Website.
 
 Zwei Zuhörer auf einem Port:
 
-* ``/nest/v1/*`` und ``/icons/*`` -- ruft Nest über das Docker-Netz auf.
-* ``/``, ``/img/*``, ``/go/*`` -- der Browser, durchgereicht von Nest über den
-  Plugin-Host (``plugin-arthur-tracker.mini.shibusa.moe``), nur GET/HEAD.
+* ``/nest/v1/*``, ``/icons/*`` und ``/img/*`` (Asset-Proxy) -- ruft Nest über das Docker-Netz auf.
+* ``/``, ``/img/*``, ``/go/*``, ``POST /api/edit`` -- der Browser, über Caddy/Authelia
+  unter der eigenen Domain (``nest.app.url``).
 
-Die Widget-Anfragen tragen die Einstellungen im Body mit (§4.2). Die Engine
-übernimmt sie von dort, damit das Plugin auch ohne Token (also ohne ``/self``)
-immer mit den aktuellen Suchen arbeitet.
+Die Widget-Anfragen tragen die Einstellungen im Body mit. Die Engine übernimmt
+sie von dort, damit das Plugin auch ohne Token (also ohne ``/self``) immer mit
+den aktuellen Suchen arbeitet.
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ import logging
 import os
 import re
 import threading
-import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from . import frame, manage
+from . import manage, webui
 from .engine import Engine
 from .manifest import MANIFEST
 from .widgets import WIDGETS
@@ -42,9 +41,10 @@ MAX_BODY = 1024 * 1024
 class ImageCache:
     """Vorschaubilder der Angebote, auf Platte gecacht.
 
-    Der Frame darf nur Bilder der eigenen Origin laden (CSP ``img-src 'self'``),
-    also holt das Plugin sie und liefert sie selbst aus. Nur von den zwei
-    bekannten Bild-CDNs -- sonst wäre ``/img`` ein offener Proxy.
+    Nest lädt Widget-Bilder nur als Pfad im Plugin (Asset-Proxy), und die eigene
+    Seite soll die Marktplätze nicht hotlinken -- also holt das Plugin sie und
+    liefert sie selbst aus. Nur von den bekannten Bild-CDNs, sonst wäre ``/img``
+    ein offener Proxy.
     """
 
     def __init__(self, directory: Path, max_files: int = 800):
@@ -175,23 +175,10 @@ def make_handler(engine: Engine, images: ImageCache):
                         return self._send(200, icon.read_bytes(), "image/svg+xml")
                     return self._json(404, {"error": "no such icon"})
                 if path == "/":
-                    # Im Pfad-Modus (Frame unter Nests Host) setzt Nest der
-                    # Antwort X-Nest-Frame-Base auf den Pfad, unter dem der
-                    # Frame liegt; die Oberfläche präfixiert alle relativen
-                    # URLs damit. Auf der Subdomain fehlt der Header.
-                    base = frame.frame_base(self.headers)
-                    # Die Launcher-Kachel öffnet die Frame-Adresse ohne
-                    # ?layout als eigenen Tab – dann die Vollseite, nicht das
-                    # kleine Widget. Im Widget-iframe schickt der Browser
-                    # Sec-Fetch-Dest: iframe.
-                    layout = params.get("layout") or (
-                        "page" if self.headers.get("Sec-Fetch-Dest") == "document" else "widget")
-                    if layout == "page":
-                        return self._html(frame.page(engine, params, base=base))
-                    return self._html(frame.widget(engine, params, base=base))
+                    return self._html(webui.page(engine, params))
                 if path.startswith("/img/"):
                     raw = unquote(path[len("/img/"):])
-                    # Neue Form "ebay-123" (Nest-Asset-Proxy), alte "ebay:123" (Galerie)
+                    # "ebay-123" (Nest-Asset-Proxy) oder "ebay:123" (eigene Seite)
                     key = raw if ":" in raw else raw.replace("-", ":", 1)
                     listing = engine.store.listing(key)
                     got = None
@@ -200,12 +187,10 @@ def make_handler(engine: Engine, images: ImageCache):
                     if not got:
                         return self._send(404, b"", "text/plain")
                     data, mime = got
-                    # Bilder ändern sich nicht; Nest setzt no-store auf dem Frame-Host
-                    # trotzdem -- der Plattencache hier ist der, der zählt.
                     return self._send(200, data, mime, {"Cache-Control": "private, max-age=86400"})
                 if path.startswith("/go/"):
                     listing = engine.store.listing(unquote(path[len("/go/"):]))
-                    return self._html(frame.go(listing.url if listing else None))
+                    return self._html(webui.go(listing.url if listing else None))
                 if path == "/favicon.ico":
                     return self._send(204, b"", "text/plain")
                 return self._json(404, {"error": "not found"})
@@ -220,6 +205,11 @@ def make_handler(engine: Engine, images: ImageCache):
                 body = self._body()
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "invalid json"})
+            # Kein Schreiben von fremden Seiten aus (CSRF): ein Browser nennt bei
+            # POST seine Origin, und die muss dieser Host sein. Nest ruft ohne Origin.
+            origin = self.headers.get("Origin")
+            if origin and urlsplit(origin).netloc not in (self.headers.get("Host"), self.headers.get("X-Forwarded-Host")):
+                return self._json(403, {"ok": False, "message": "Fremde Herkunft", "error": "cross-origin"})
             try:
                 if m := re.fullmatch(r"/nest/v1/widgets/([A-Za-z][\w-]*)/data", path):
                     engine.update_settings(body.get("settings"))
@@ -229,12 +219,16 @@ def make_handler(engine: Engine, images: ImageCache):
                     return self._json(200, build(engine, body.get("size")))
                 if m := re.fullmatch(r"/nest/v1/actions/([A-Za-z][\w-]*)", path):
                     return self._json(200, self._action(m.group(1), body if isinstance(body, dict) else {}))
+                if path == "/api/edit":
+                    # Die eigene Seite: Suchen anlegen/ändern, archivieren, manuelle Suche.
+                    return self._json(200, manage.handle(engine, body))
                 if path == "/nest/v1/settings/changed":
                     engine.update_settings(body.get("settings"))
                     return self._json(200, {"ok": True})
                 if path == "/nest/v1/events":
                     # Keine Ereignisse abonniert (kein events:read); ein Aufruf
-                    # hier ist also nicht von Nest und wird nicht bestätigt.
+                    # hier ist also nicht von Nest und wird nicht bestätigt. Ein
+                    # rotierter Token fällt beim nächsten Aufruf als 401 auf.
                     return self._json(404, {"error": "no events subscribed"})
                 return self._json(404, {"error": "not found"})
             except Exception:
@@ -242,10 +236,6 @@ def make_handler(engine: Engine, images: ImageCache):
                 return self._json(500, {"error": "internal"})
 
         def _action(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
-            if action == "edit":
-                # Frame-Aktion der Seite (Suchen, Archiv); Nest ruft sie im Namen
-                # des angemeldeten Benutzers auf, der Frame selbst kann nicht schreiben.
-                return manage.handle(engine, params)
             if action == "check-now":
                 if not engine.active_searches:
                     return {"ok": False, "message": "Keine aktive Suche – erst in den Einstellungen anlegen."}
@@ -275,8 +265,8 @@ def make_handler(engine: Engine, images: ImageCache):
                 return {"ok": True, "message": msg, "refresh": list(WIDGETS),
                         "level": "warning" if s.errors else "success"}
             if action == "test-notify":
-                if not engine.client.configured:
-                    return {"ok": False, "message": "Kein Token im Container – in Nest „Token übernehmen“ ausführen."}
+                if not engine.client.configured and not engine.client.claim():
+                    return {"ok": False, "message": "Kein Token von Nest – dort die Rechte des Plugins akzeptieren."}
                 res = engine.client.notify("Tracker ist verbunden",
                                            "So sieht eine Treffer-Meldung aus. Ein Tipp öffnet das Angebot.",
                                            level=engine.settings.notify_level,
@@ -301,11 +291,3 @@ def serve(engine: Engine, port: int, data_dir: Path) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer(("", port), make_handler(engine, images))
     httpd.daemon_threads = True
     return httpd
-
-
-def wait_for_settings(engine: Engine, attempts: int = 3) -> None:
-    for i in range(attempts):
-        engine.refresh_from_nest()
-        if engine.nest_status is None or "Token" in (engine.nest_status or "") or "Scope" in (engine.nest_status or ""):
-            return
-        time.sleep(2 * (i + 1))

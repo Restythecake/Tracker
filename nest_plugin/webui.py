@@ -1,31 +1,17 @@
-"""Die iframe-Oberfläche: serverseitig gerendertes HTML, kein Build-Schritt.
+"""Die Web-Oberfläche des Trackers: serverseitig gerendertes HTML, kein Build-Schritt.
 
-Randbedingungen aus Nests Sandbox (PLUGIN-API §7), die das Design bestimmen:
+Eine normale, eigenständige Website an der Wurzel des Plugin-Ports (hinter Caddy
+und Authelia unter eigener Domain). Ansicht und Filter sind Query-Parameter;
+geschrieben wird per ``POST /api/edit`` an den eigenen Server (``manage.handle``).
 
-* Nest reicht auf dem Plugin-Host nur GET/HEAD durch. Die Oberfläche liest also
-  nur; Ansicht und Filter sind Query-Parameter, Schreiben geht über Nests
-  Einstellungsformular und die Aktionsknöpfe.
-* ``img-src 'self' data:`` -- Bilder von eBay/Kleinanzeigen laufen über ``/img/<key>``.
-* Kein ``allow-popups``, und ``nest:open`` darf nur die *eigene* Adresse öffnen.
-  Ein Klick auf ein Angebot öffnet deshalb ``/go/<key>`` im neuen Tab, und diese
-  Seite leitet zum Marktplatz weiter.
-* Zwei Adressen (Arthur 2026-09-25): die Plugin-Subdomain (``plugin-arthur-tracker.
-  …``) und Nests eigener Host unter ``/plugins/frame/arthur-tracker/…`` -- der
-  Pfad ist der Fallback, wenn die Subdomain nicht auflöst (remote, kein
-  Wildcard-DNS). Der Server sagt über ``X-Nest-Frame-Base``, welche der beiden
-  gerade bedient wird; alle relativen URLs der Seite werden damit präfixiert,
-  damit sie im Pfad-Modus wieder beim Plugin landen.
-* ``scrolling="no"`` am iframe: gescrollt wird innerhalb der Seite.
-* Ohne ``allow-same-origin`` ist der Frame eine opake Origin -- er kann seine
-  eigene Origin nicht per fetch lesen (kein CORS). Aktualisiert wird per Reload.
+* Bilder von eBay/Kleinanzeigen laufen über ``/img/<key>`` (Cache, kein Hotlinking).
+* Ein Klick auf ein Angebot öffnet ``/go/<key>`` im neuen Tab; diese Seite leitet
+  zum Marktplatz weiter, ohne ihm die Tracker-Adresse als Referrer zu zeigen.
 """
 from __future__ import annotations
 
 import html
 import json
-import os
-import re
-import threading
 from datetime import timedelta
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -39,51 +25,7 @@ from .engine import Engine
 from . import manage, manual
 from .manage import TIER_HINT, TIER_LABEL, TIERS
 from .store import Match, now, parse_iso
-from .widgets import ago, source_checks, until
-
-NEST_ORIGIN = os.environ.get("NEST_DASHBOARD_ORIGIN", "https://nest.mini.shibusa.moe")
-
-# Der Pfad, unter dem Nest diese Oberfläche im Pfad-Modus ausliefert
-# (/plugins/frame/<label>/…). Der Proxy setzt X-Nest-Frame-Base nur dort, wo
-# ein Frame wirklich unter Nests Host liegt; auf der Subdomain bleibt der
-# Header weg und die Seite bedient sich selbst. Ohne Header ist der Basis-
-# pfad leer -- alles bleibt bei den absoluten Pfaden der Subdomain-Form.
-FRAME_BASE_HEADER = "X-Nest-Frame-Base"
-# Nests gemeinsamer Präfix für Frames im Pfad-Modus, ohne Slashes an den Enden.
-FRAME_PATH_PREFIX = "plugins/frame/"
-_LABEL_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
-
-
-def frame_base(headers: Any) -> str:
-    """Der Basispfad der Oberfläche: "" auf der Subdomain, sonst der Mount
-    unter Nests Host -- `/plugins/frame/arthur-tracker/`, mit führendem und
-    schließendem Slash.
-
-    Nest schickt den *vollen* Mount, Präfix eingeschlossen: der Browser löst
-    die pfad-absoluten Links dieser Seite gegen die Wurzel von Nests Host auf,
-    und dort liegt das Dashboard (hinter Authelia). Früher erwartete diese
-    Funktion nur `/<label>/`, verwarf Nests echten Wert -- und jeder Link
-    zeigte auf `/?layout=page`, also auf die Nest-Startseite. Im Frame endete
-    das in Authelias Login, das sich nicht einbetten lässt ("Verbindung
-    abgelehnt"). Die kurze Form bleibt aus Kompatibilität erlaubt.
-
-    Fremde oder falsch geformte Werte werden verworfen: der Header kommt von
-    Nest, nicht vom Browser -- Nest streicht einen vom Browser mitgeschickten
-    gleichnamigen Header vorher, das hier ist die dritte Sperre."""
-    raw = ""
-    try:
-        raw = headers.get(FRAME_BASE_HEADER, "") or ""
-    except Exception:
-        return ""
-    if not raw.startswith("/") or not raw.endswith("/"):
-        return ""
-    inner = raw[1:-1]
-    if inner.startswith(FRAME_PATH_PREFIX):
-        inner = inner[len(FRAME_PATH_PREFIX):]
-    if not inner or "/" in inner or not _LABEL_RE.fullmatch(inner):
-        return ""
-    return raw
-
+from .widgets import DEAL_VERDICTS, ago, is_deal, is_new as _is_new, source_checks, until
 
 def esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
@@ -91,7 +33,7 @@ def esc(value: Any) -> str:
 
 # ---------------------------------------------------------------- Design
 # Nests Tokens (src/index.css, DESIGN.md §2): Teal-Akzent, ruhige Flächen,
-# weiche Schatten. Dunkel ist Standard, Nest schickt das Theme per postMessage.
+# weiche Schatten. Dunkel ist Standard, hell folgt dem System (oder ?theme=light).
 CSS = """
 :root{
   --bg:hsl(222 24% 9%);--surface:hsl(222 20% 12%);--elev:hsl(222 18% 15%);--sunk:hsl(222 22% 10%);
@@ -521,53 +463,19 @@ def icon(name: str) -> str:
             f"stroke-linecap=round stroke-linejoin=round aria-hidden=true>{_I[name]}</svg>")
 
 
-DEAL_VERDICTS = ("top", "gut", "verdaechtig")
 PAGE_SIZE = 48
 PAGE_MAX = 240
 PAGE_SCAN = 400  # so viele Treffer werden fürs Filtern/Sortieren gelesen
-FRESH = timedelta(hours=24)
 SOURCE_SHORT = {"ebay": "eB", "kleinanzeigen": "KA", "vinted": "Vi", "mydealz": "md"}
 
 JS = """
 (function(){
-  var NEST = %(nest)s, BASE = %(base)s, root = document.documentElement;
-  var JSURL = location.protocol + '//' + location.host + BASE;
-  var embedded = window.parent !== window;
-  // Absolute Adresse dieser Oberfläche: Subdomain-Form ohne Basispfad, im
-  // Pfad-Modus Nests Origin + Basispfad. Alle relativen Pfade laufen darüber.
-  var self = location.protocol + '//' + location.host + BASE;
+  var root = document.documentElement;
   function theme(t){ if(t === 'light'){root.classList.add('light')} else if(t === 'dark'){root.classList.remove('light')} }
-  if(!embedded && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches){theme('light')}
+  if(window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches){theme('light')}
   var qs = new URLSearchParams(location.search); if(qs.get('theme')){theme(qs.get('theme'))}
-  window.addEventListener('message', function(e){
-    // Doppelt prüfen wie Nest selbst: wirklich der Einbetter UND die richtige
-    // Absender-Origin. Eine sandboxed Frame-Origin ist opak -- der Browser
-    // meldet "null" statt der URL-Origin (nachgemessen, Playwright 2026-09-25).
-    // Nest akzeptiert deshalb genau: source === dieser Frame, und origin
-    // NEST (Subdomain-Form) oder "null" (Pfad-Form, opak). Alles andere ist
-    // nicht unser Einbetter.
-    if(e.source !== window.parent) return;
-    if(e.origin !== NEST && e.origin !== 'null') return;
-    var d = e.data || {};
-    if(d.type === 'nest:init' || d.type === 'nest:theme'){ theme(d.theme); try{sessionStorage.theme=d.theme}catch(_){} }
-    if(d.type === 'nest:action-result'){ done(d); }
-  });
-  if(embedded){
-    // Outbound ebenfalls '*': eine opake Origin bekommt postMessage mit
-    // konkretem Ziel nie zugestellt (nachgemessen). Sicher, weil der Frame
-    // sandboxed ist und Nest jede Nachricht an source und origin prüft.
-    window.parent.postMessage({type:'nest:ready'}, '*');
-  }
-  function open(path){
-    // Ohne Basis ist der Pfad absolut auf der Subdomain (/?layout=page,
-    // /go/…). Mit Basis (Pfad-Modus) landet jeder Pfad unter dem Mount:
-    // führenden Slash ab, dann ans Basis-Ende (BASE endet mit /).
-    var url = BASE ? self + path.replace(/^[/]/, '') : self + path;
-    if(embedded){ window.parent.postMessage({type:'nest:open', url:url}, '*'); }
-    else { window.open(url, '_blank', 'noopener'); }
-  }
-  // ---- Schreiben: nur über Nest (nest:action -> Frame-Aktion "edit").
-  var pending = {}, tt;
+  // ---- Schreiben: POST an den eigenen Server (/api/edit -> manage.handle).
+  var busy = 0, tt;
   function toast(text, bad){
     var t = document.querySelector('.toast');
     if(!t){ t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t); }
@@ -575,29 +483,21 @@ JS = """
     clearTimeout(tt); tt = setTimeout(function(){ t.classList.remove('on') }, bad ? 5200 : 2600);
   }
   function act(params, el, after){
-    if(!embedded){ toast('Bearbeiten geht nur in Nest – dort die Tracker-Kachel öffnen.', true); return; }
-    var id = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-    pending[id] = {el: el, after: after};
-    if(el) el.classList.add('busy');
-    window.parent.postMessage({type:'nest:action', action:'edit', params:params, requestId:id}, '*');
-    setTimeout(function(){
-      if(!pending[id]) return;
-      delete pending[id]; if(el) el.classList.remove('busy');
-      toast('Nest hat nicht geantwortet – Seite neu laden?', true);
-    }, 20000);
-  }
-  function done(d){
-    var p = pending[d.requestId]; if(!p) return;
-    delete pending[d.requestId];
-    if(p.el) p.el.classList.remove('busy');
-    if(!d.ok){
-      var msg = document.querySelector('form .msg');
-      if(msg && p.el && p.el.tagName === 'FORM'){ msg.textContent = d.message || 'Fehler'; }
-      toast(d.message || 'Hat nicht geklappt', true); return;
-    }
-    if(p.after){ p.after(d); return; }
-    dirty = false; toast(d.message || 'Erledigt');
-    setTimeout(function(){ location.reload() }, 450);
+    busy++; if(el) el.classList.add('busy');
+    fetch('/api/edit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)})
+      .then(function(r){ return r.json() })
+      .catch(function(){ return {ok:false, message:'Tracker nicht erreichbar'} })
+      .then(function(d){
+        busy--; if(el) el.classList.remove('busy');
+        if(!d.ok){
+          var msg = document.querySelector('form .msg');
+          if(msg && el && el.tagName === 'FORM'){ msg.textContent = d.message || 'Fehler'; }
+          toast(d.message || 'Hat nicht geklappt', true); return;
+        }
+        if(after){ after(d); return; }
+        dirty = false; toast(d.message || 'Erledigt');
+        setTimeout(function(){ location.reload() }, 450);
+      });
   }
   function fields(form){
     var out = {};
@@ -621,13 +521,13 @@ JS = """
       if(here){ toast('Eine manuelle Suche läuft schon', true); return; }
       act(params, form, function(d){
         toast(d.message || 'Läuft'); dirty = false;
-        setTimeout(function(){ location.href = JSURL + '?layout=page&v=suche' }, 400);
+        setTimeout(function(){ location.href = '/?v=suche' }, 400);
       });
       return;
     }
     if(params.op === 'manual-save'){
       act(params, form, function(d){ dirty = false; toast(d.message || 'Gespeichert');
-        setTimeout(function(){ location.href = JSURL + '?layout=page&v=suchen' }, 500); });
+        setTimeout(function(){ location.href = '/?v=suchen' }, 500); });
       return;
     }
     if(params.op === 'rules'){ params.rules = f; }
@@ -645,7 +545,7 @@ JS = """
     if(a){
       e.preventDefault(); e.stopPropagation();
       var op = a.getAttribute('data-act'), q = a.getAttribute('data-confirm');
-      // confirm() ist im Sandbox-Frame gesperrt (kein allow-modals): zweiter Klick bestätigt.
+      // Rückfrage ohne Dialog: der Knopf zeigt die Frage, ein zweiter Klick bestätigt.
       if(q && !a.classList.contains('sure')){
         a.classList.add('sure'); a.setAttribute('data-was', a.innerHTML); a.textContent = q;
         setTimeout(function(){ if(a.classList.contains('sure')){ a.classList.remove('sure'); a.innerHTML = a.getAttribute('data-was') } }, 4000);
@@ -666,24 +566,21 @@ JS = """
     var el = e.target.closest('[data-open]');
     if(!el) return;
     e.preventDefault();
-    // "Alles"/Vollseite: Nest zeigt die Seite als eigenes Blatt (nest:page).
-    if(embedded && el.hasAttribute('data-page')){ window.parent.postMessage({type:'nest:page'}, '*'); return; }
-    open(el.getAttribute('data-open'));
+    window.open(el.getAttribute('data-open'), '_blank', 'noopener');
   });
-  // Nachladen statt fetch: eine opake Origin kann sich selbst nicht lesen.
-  // Nie mitten im Tippen oder während eine Aktion läuft.
+  // Frische Daten per Reload (alles ist serverseitig gerendert). Nie mitten im Tippen oder während eine Aktion läuft.
   var idle = Date.now();
   ['pointermove','wheel','keydown','touchstart'].forEach(function(n){addEventListener(n,function(){idle=Date.now()},{passive:true})});
   setInterval(function(){
-    if(dirty || Object.keys(pending).length || document.querySelector('form[data-op]')) return;
+    if(dirty || busy || document.querySelector('form[data-op]')) return;
     if(Date.now()-idle > 20000 && !document.hidden){ location.reload() }
   }, %(reload)d);
 })();
 """
 
 
-def _page(body: str, *, page: bool = False, reload_ms: int = 90_000, base: str = "") -> str:
-    script = JS % {"nest": json.dumps(NEST_ORIGIN), "base": json.dumps(base), "reload": reload_ms}
+def _page(body: str, *, page: bool = False, reload_ms: int = 90_000) -> str:
+    script = JS % {"reload": reload_ms}
     return (
         "<!doctype html><html lang=de><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -692,38 +589,15 @@ def _page(body: str, *, page: bool = False, reload_ms: int = 90_000, base: str =
     )
 
 
-# Der Basispfad, den die Seitenfunktionen gerade verwenden. Wird pro Anfrage
-# von widget()/page() gesetzt (thread-lokal, weil ThreadingHTTPServer jede
-# Anfrage in ihrem Thread bedient) und von den relativen URL-Helfern gelesen.
-_base = threading.local()
-
-
-def _b() -> str:
-    """Der Basispfad der aktuellen Anfrage: "" auf der Subdomain, sonst der Mount."""
-    return getattr(_base, "path", "") or ""
-
-
 def _qs(**params: Any) -> str:
-    """Eine relative URL auf dieser Oberfläche (mit Basis im Pfad-Modus, ohne doppelten Slash)."""
+    """Eine Adresse auf dieser Oberfläche: die Wurzel plus Query."""
     clean = {k: v for k, v in params.items() if v not in (None, "")}
-    if clean:
-        return _b() + "?" + urlencode(clean) if _b() else "/?" + urlencode(clean)
-    return _b() if _b() else "/"
+    return "/?" + urlencode(clean) if clean else "/"
 
 
 # ---------------------------------------------------------------- Bausteine
 def _verdict(m: Match) -> str | None:
     return (m.listing.assessment or {}).get("verdict")
-
-
-def is_deal(m: Match) -> bool:
-    """Ein Deal: laut Bewertung gut/top/verdächtig -- ohne Bewertung jeder gemeldete Treffer."""
-    v = _verdict(m)
-    return v in DEAL_VERDICTS if v else not m.silent
-
-
-def _is_new(m: Match) -> bool:
-    return bool(not m.silent and m.first_seen and (now() - m.first_seen) < FRESH)
 
 
 def _money(v: float | None) -> str:
@@ -763,7 +637,7 @@ def _card(m: Match, *, detail: bool = False, hero: bool = False, tier: str | Non
     v = a.get("verdict")
     deal = is_deal(m) and v in DEAL_VERDICTS
     key = quote(m.key, safe="")
-    img = (f"<img src='{_b()}img/{key}' alt='' loading={'eager' if hero else 'lazy'} decoding=async>"
+    img = (f"<img src='/img/{key}' alt='' loading={'eager' if hero else 'lazy'} decoding=async>"
            if l.image_url else f"<div class='ph src-{esc(l.source)}'>{icon('image')}</div>")
     new = f"<span class='glass new'>Neu</span>" if _is_new(m) else ""
     verdict = f"<span class='verdict v-{esc(v)}'>{esc(a.get('label') or v)}</span>" if v else ""
@@ -790,7 +664,7 @@ def _card(m: Match, *, detail: bool = False, hero: bool = False, tier: str | Non
             extra += f"<ul class=pc>{''.join(items)}</ul>"
     cls = "card" + (" deal v-" + v if deal else "") + (" hero" if hero else "")
     return (
-        f"<a class='{cls}' href='{esc(l.url)}' data-open='{_b()}go/{key}' title='{esc(l.title)}'>"
+        f"<a class='{cls}' href='{esc(l.url)}' data-open='/go/{key}' title='{esc(l.title)}'>"
         f"<div class=media>{img}<div class=tags>{_src(l.source)}{new}</div>{verdict}{act}</div>"
         f"<div class=info><div class=priceline><span class=price>{esc(_money(l.price))}</span>{drop}</div>"
         f"{specs}<div class=ttl>{esc(l.title)}</div>{extra}{foot}{below}</div></a>"
@@ -846,41 +720,6 @@ def _sparkline(points: list[float]) -> str:
             f"<polygon points='{area}' fill='url(#g)'></polygon><polyline points='{line}' fill='none' "
             "stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' "
             "vector-effect='non-scaling-stroke'></polyline></svg>")
-
-
-# ---------------------------------------------------------------- Kachel
-def widget(engine: Engine, params: dict[str, str], base: str = "") -> str:
-    """Die Kachel: Kopf mit Status und Filtern, darunter eine Kartenleiste -- Deals zuerst."""
-    _base.path = base
-    sel = params.get("s") or ""
-    names = [s.name for s in engine.searches]
-    if sel not in names:
-        sel = ""
-    chips = [f"<a class='chip {'on' if not sel else ''}' href='{_qs()}'>Alle</a>"]
-    for name in names:
-        chips.append(f"<a class='chip {'on' if name == sel else ''}' href='{esc(_qs(s=name))}'>"
-                     f"<span class='dot s-{_search_state(engine, name)}'></span>{esc(name)}</a>")
-    state, when = _status_line(engine)
-    matches = engine.recent_matches(limit=60, search=sel or None, include_silent=True)
-    matches.sort(key=lambda m: (not is_deal(m), not _is_new(m)))  # stabil: innerhalb neueste zuerst
-    matches = matches[:24]
-    if not engine.searches:
-        content = (f"<div class=empty><div><div class=ic>{icon('search')}</div><b>Noch keine Suche</b>"
-                   "In den Tracker-Einstellungen eine Zeile wie <code>thinkpad t14 max:600 -defekt</code> anlegen.</div></div>")
-    elif not matches:
-        content = (f"<div class=empty><div><div class=ic>{icon('radar')}</div><b>Noch nichts Passendes</b>"
-                   f"{'Die erste Suche läuft gerade.' if engine.running else 'Sobald etwas auftaucht, steht es hier.'}</div></div>")
-    else:
-        content = "<div class=strip>" + "".join(_card(m) for m in matches) + "</div>"
-    body = (
-        "<div class=tile><div class=top>"
-        f"<div class=brand><div class=logo>{icon('radar')}</div><div class=name>Tracker</div></div>"
-        f"<div class=when><span class='dot s-{state}{' pulse' if state == 'loading' else ''}'></span>{esc(when)}</div>"
-        f"<div class=chips>{''.join(chips)}</div>"
-        f"<button class=btn data-page data-open='{_b()}?layout=page'>Alles {icon('out')}</button>"
-        f"</div>{content}</div>"
-    )
-    return _page(body, base=base)
 
 
 # ---------------------------------------------------------------- Vollbild
@@ -974,7 +813,7 @@ def _search_cards(engine: Engine, sel: str) -> str:
         warn = "".join(f"<div class='err w'>{icon('alert')}<span>{esc(w)}</span></div>" for w in p.warnings)
         spark = _sparkline([v for _, v in engine.store.price_series(s.name, week)])
         cards.append(
-            f"<a class='srch{' on' if s.name == sel else ''}' href='{esc(_qs(layout='page', s=s.name))}#angebote'>"
+            f"<a class='srch{' on' if s.name == sel else ''}' href='{esc(_qs(s=s.name))}#angebote'>"
             f"<div class=h><span class='pill tint s-{st}'><span class='dot{' pulse' if st == 'loading' else ''}'>"
             f"</span>{label}</span><span class=n>{esc(s.name)}</span></div>"
             f"{nums}{spark}</div><div class=row>{srcs}{price_pill}</div>"
@@ -1006,7 +845,7 @@ def _offers(engine: Engine, matches: list[Match], sel: str, flt: str, order: str
     total = len(matches)
 
     def link(**kw: str) -> str:
-        q = {"layout": "page", "s": sel, "f": flt if flt != "alle" else "", "o": order if order != "neu" else ""}
+        q = {"s": sel, "f": flt if flt != "alle" else "", "o": order if order != "neu" else ""}
         q.update(kw)
         return esc(_qs(**q)) + "#angebote"
 
@@ -1080,9 +919,8 @@ def _restock_section(engine: Engine) -> str:
             f"{avail} von {len(rows)} Shops</span></div><div class=panel>{''.join(items)}</div></section>")
 
 
-def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
+def page(engine: Engine, params: dict[str, str]) -> str:
     """Die Vollbild-Seite: Status, Kennzahlen, beste Deals, Suchen, Angebote, Quellen."""
-    _base.path = base
     names = [s.name for s in engine.searches]
     sel = params.get("s") or ""
     if sel not in names:
@@ -1125,7 +963,7 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
             main = _archive_page(engine, params, limit)
         body = (f"<div class=wrap>{head}{nav}{main}"
                 f"<footer>Tracker {esc(__version__)} · aktualisiert sich von selbst</footer></div>")
-        return _page(body, page=True, reload_ms=3_000 if view == "suche" and manual.state_of(engine).get("current", {}).get("status") == "running" else 120_000, base=base)
+        return _page(body, page=True, reload_ms=3_000 if view == "suche" and manual.state_of(engine).get("current", {}).get("status") == "running" else 120_000)
     body = (
         "<div class=wrap>"
         f"<header class=hdr><div class=logo>{icon('radar')}</div><div><h1>Tracker</h1>"
@@ -1141,7 +979,7 @@ def page(engine: Engine, params: dict[str, str], base: str = "") -> str:
         f"<footer>Tracker {esc(__version__)} · aktualisiert sich von selbst</footer>"
         "</div>"
     )
-    return _page(body, page=True, reload_ms=120_000, base=base)
+    return _page(body, page=True, reload_ms=120_000)
 
 
 # ---------------------------------------------------------------- Seiten
@@ -1167,7 +1005,7 @@ def _searchbar(view: str) -> str:
 def _nav(view: str, counts: dict[str, int], archived: int, searches: int) -> str:
     def tab(v: str, label: str, ic: str, n: int | None = None, cls: str = "") -> str:
         badge = f"<span class=n>{n}</span>" if n is not None else ""
-        return (f"<a class='{'on' if v == view else ''} {cls}' href='{esc(_qs(layout='page', v=v if v != 'uebersicht' else ''))}'>"
+        return (f"<a class='{'on' if v == view else ''} {cls}' href='{esc(_qs(v=v if v != 'uebersicht' else ''))}'>"
                 f"{icon(ic)}{esc(label)}{badge}</a>")
     tabs = [tab("uebersicht", "Übersicht", "home"), "<span class=gap></span>"]
     tabs += [tab(t, TIER_LABEL[t], TIER_ICON[t], counts.get(t, 0), f"t-{t}") for t in TIERS
@@ -1187,10 +1025,10 @@ def _tier_overview(matches: list[Match], tier_of: dict[str, str]) -> str:
         prices = [m.listing.price for m in group if m.listing.price]
         span = (f"{format_money(min(prices))} – {format_money(max(prices))}" if len(prices) > 1
                 else format_money(prices[0]) if prices else "nichts drin")
-        thumbs = "".join([f"<img src='{_b()}img/{quote(m.key, safe='')}' alt='' loading=lazy>"
+        thumbs = "".join([f"<img src='/img/{quote(m.key, safe='')}' alt='' loading=lazy>"
                           for m in group if m.listing.image_url][:5])
         cards.append(
-            f"<a class='tier t-{t}' href='{esc(_qs(layout='page', v=t))}'>"
+            f"<a class='tier t-{t}' href='{esc(_qs(v=t))}'>"
             f"<div class=top><span class='ic tint'>{icon(TIER_ICON[t])}</span>{esc(TIER_LABEL[t])}"
             f"<span class=go>{icon('out')}</span></div>"
             f"<div class=v>{len(group)}</div><div class=h>{esc(span)}<br>{esc(TIER_HINT[t])}</div>"
@@ -1201,8 +1039,8 @@ def _tier_overview(matches: list[Match], tier_of: dict[str, str]) -> str:
 
 
 def _search_chips(engine: Engine, sel: str, **keep: str) -> str:
-    chips = [f"<a class='chip {'on' if not sel else ''}' href='{esc(_qs(layout='page', **keep))}'>Alle Suchen</a>"]
-    chips += [f"<a class='chip {'on' if s.name == sel else ''}' href='{esc(_qs(layout='page', s=s.name, **keep))}'>"
+    chips = [f"<a class='chip {'on' if not sel else ''}' href='{esc(_qs(**keep))}'>Alle Suchen</a>"]
+    chips += [f"<a class='chip {'on' if s.name == sel else ''}' href='{esc(_qs(s=s.name, **keep))}'>"
               f"{esc(s.name)}</a>" for s in engine.searches]
     return f"<div class=chips>{''.join(chips)}</div>"
 
@@ -1227,7 +1065,7 @@ def _tier_page(engine: Engine, tier: str, matches: list[Match], tier_of: dict[st
     group = [m for m in matches if tier_of.get(m.key) == tier and (not sel or m.search == sel)]
     group = _sorted(group, order)
     keep = {"v": tier, "o": order}
-    seg_o = "".join(f"<a class='{'on' if k == order else ''}' href='{esc(_qs(layout='page', s=sel, v=tier, o=k))}'>{v}</a>"
+    seg_o = "".join(f"<a class='{'on' if k == order else ''}' href='{esc(_qs(s=sel, v=tier, o=k))}'>{v}</a>"
                     for k, v in ORDERS.items())
     bulk = ""
     if group:
@@ -1240,7 +1078,7 @@ def _tier_page(engine: Engine, tier: str, matches: list[Match], tier_of: dict[st
                 f"<b>Gerade nichts in „{esc(TIER_LABEL[tier])}“</b>Sobald etwas passt, landet es hier.</div></div>")
     more = ""
     if len(group) > limit:
-        more = (f"<div class=more><a class=btn href='{esc(_qs(layout='page', s=sel, n=str(min(limit + PAGE_SIZE, PAGE_MAX)), **keep))}'>"
+        more = (f"<div class=more><a class=btn href='{esc(_qs(s=sel, n=str(min(limit + PAGE_SIZE, PAGE_MAX)), **keep))}'>"
                 f"Mehr anzeigen · noch {len(group) - limit}</a></div>")
     rules = manage.rules(engine.store)
     auto = ""
@@ -1286,7 +1124,7 @@ def _search_form(engine: Engine, edit: str | None) -> str:
         f"<span class=dot></span>{esc(SOURCE_LABELS.get(s, s))}</label>" for s in SOURCE_CHOICES)
     default = ", ".join(SOURCE_LABELS.get(s, s) for s in engine.settings.default_sources)
     ev = str(f.get("evaluate") or "")
-    back = esc(_qs(layout="page", v="suchen"))
+    back = esc(_qs(v="suchen"))
     return (
         f"<form class=form data-op=search-save data-back='{back}'{attrs}>"
         f"<h3>{icon('plus' if target is None else 'edit')}{esc(title)}</h3><p class=note>{esc(note)}</p>"
@@ -1362,7 +1200,7 @@ def _searches_page(engine: Engine, params: dict[str, str]) -> str:
         tracked = engine.store.count_tracked(s.name)
         meta += f"<span>{tracked} gemerkt · geprüft {esc(ago(parse_iso(row['last_run'])) if row and row['last_run'] else '–')}</span>"
         name = esc(s.name)
-        btns = (f"<a class='btn sm' href='{esc(_qs(layout='page', v='suchen', edit=s.name))}#form'>{icon('edit')}Bearbeiten</a>"
+        btns = (f"<a class='btn sm' href='{esc(_qs(v='suchen', edit=s.name))}#form'>{icon('edit')}Bearbeiten</a>"
                 f"<button class='btn sm' data-act=search-toggle data-name='{name}'>"
                 f"{icon('play' if not s.enabled else 'pause')}{'Fortsetzen' if not s.enabled else 'Pausieren'}</button>"
                 f"<button class='btn sm dng' data-act=search-delete data-name='{name}' data-confirm='Wirklich entfernen?'>"
@@ -1428,7 +1266,7 @@ def _manual_page(engine: Engine, params: dict[str, str], limit: int) -> str:
     if uniq:
         shown = uniq[:limit]
         grid = "<div class=grid>" + "".join(_card(m, detail=True) for m in shown) + "</div>"
-        more = (f"<div class=more><a class=btn href='{esc(_qs(layout='page', v='suche', n=str(min(limit + PAGE_SIZE, PAGE_MAX))))}'>"
+        more = (f"<div class=more><a class=btn href='{esc(_qs(v='suche', n=str(min(limit + PAGE_SIZE, PAGE_MAX))))}'>"
                 f"Mehr anzeigen · noch {len(uniq) - limit}</a></div>") if len(uniq) > limit else ""
     else:
         grid = (f"<div class=nodeal><div class='ic tint v-gut'>{icon('search')}</div><div>"
@@ -1439,7 +1277,7 @@ def _manual_page(engine: Engine, params: dict[str, str], limit: int) -> str:
         more = ""
     history = st.get("history") or []
     chips = "".join(
-        f"<a class=chip href='{esc(_qs(layout='page', v='suche', q=h.get('line') or ''))}'>{esc(h.get('name') or h.get('query') or '')}</a>"
+        f"<a class=chip href='{esc(_qs(v='suche', q=h.get('line') or ''))}'>{esc(h.get('name') or h.get('query') or '')}</a>"
         for h in history[:8])
     hist = f"<div class=toolbar><div class=chips>{chips}</div></div>" if chips else ""
     return (f"<section class=sec>{head}{runbox}</section><section class=sec>{grid}{more}</section>{hist}")
@@ -1491,7 +1329,7 @@ GO_PREFIXES = ("https://www.ebay.", "https://www.kleinanzeigen.de/", "https://ww
 
 
 def go(target_url: str | None) -> str:
-    """Weiterleitung in neuem Tab: Nest verwirft 3xx auf Plugin-Hosts, also per Meta/JS."""
+    """Weiterleitung zum Marktplatz, nur zu bekannten Zielen (kein offener Redirect)."""
     if not target_url or not target_url.startswith(GO_PREFIXES):
         return _page(f"<div class=tile><div class=empty><div><div class=ic>{icon('alert')}</div>"
                      "<b>Angebot nicht gefunden</b>Vielleicht ist es schon weg.</div></div></div>")

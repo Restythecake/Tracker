@@ -1,9 +1,7 @@
 """Was man auf der Tracker-Seite selbst einstellt: eigene Suchen, Preisklassen, Archiv.
 
-Die Seite ist ein sandboxed iframe ohne Schreibrecht (Nest lässt nur GET durch).
-Geschrieben wird über die Frame-Aktion ``edit`` (Manifest: ``"frame": true``):
-Die Seite schickt ``nest:action`` an Nest, Nest ruft die Aktion unter dem
-angemeldeten Benutzer auf -- genau wie ein Klick auf einen Knopf in Nest.
+Geschrieben wird direkt: die Seite schickt ``POST /api/edit`` an den eigenen
+Server, der ``handle`` aufruft.
 
 Eigene Suchen liegen im Plugin-Speicher (``meta``), nicht in Nests
 Einstellungen: ein Plugin kann seine Einstellungen nicht selbst schreiben.
@@ -251,7 +249,8 @@ class EditError(ValueError):
 
 
 def handle(engine: Any, params: dict[str, Any]) -> dict[str, Any]:
-    """Die Frame-Aktion ``edit``. Antwort im Format von Nests Aktionsergebnis."""
+    """Eine Schreibaktion der Seite (``POST /api/edit``). Antwort: ``{ok, message, level}``;
+    ``refresh`` nennt die Nest-Widgets, deren Daten sich dadurch ändern."""
     op = str(params.get("op") or "")
     try:
         message = _OPS[op](engine, params) if op in _OPS else None

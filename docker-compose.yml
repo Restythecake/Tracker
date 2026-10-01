@@ -1,10 +1,11 @@
-# Tracker-Plugin für Nest.
+# Tracker: eine normale Compose-App, die zusätzlich Nest-Plugin ist.
 #
 #   docker compose up -d --build
 #
-# Danach in Nest: Einstellungen → Plugins → Suchen → "Tracker" installieren und
-# freigeben, dann "Token übernehmen" (baut den Container mit NEST_PLUGIN_TOKEN
-# neu). Oder deploy/install.sh, das genau diese Schritte per API macht.
+# Nest erkennt den Container an den Labels von selbst; die Rechte stehen in
+# nest.plugin.scopes und werden in Nest akzeptiert (Plugin-Einstellungen). Den
+# Token holt sich der Tracker selbst per POST $NEST_PLUGIN_URL/claim -- nichts
+# davon steht in der Umgebung. Die Website liegt hinter Caddy unter nest.app.url.
 services:
   tracker:
     build: .
@@ -14,14 +15,17 @@ services:
     labels:
       nest.plugin: "1"
       nest.plugin.id: arthur.tracker
+      nest.plugin.scopes: "notify"
+      nest.plugin.port: "8080"
+      nest.app.url: https://tracker.mini.shibusa.moe
     environment:
       NEST_PLUGIN_URL: http://nest:8080/api/plugin/v1
-      NEST_DASHBOARD_ORIGIN: https://nest.mini.shibusa.moe
       TZ: Europe/Berlin
     volumes:
       - tracker-data:/data
     networks:
       - nest
+      - proxy  # Caddy leitet tracker.mini.shibusa.moe an nest-tracker:8080
 
 volumes:
   tracker-data:
@@ -29,4 +33,7 @@ volumes:
 networks:
   nest:
     name: nest_default
+    external: true
+  proxy:
+    name: proxy
     external: true

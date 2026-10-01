@@ -15,7 +15,7 @@ from ebay_tracker.models import SOURCE_LABELS, format_money
 from ebay_tracker.sources.fetch import STATS
 
 from .engine import Engine
-from .store import iso, now, parse_iso
+from .store import Match, iso, now, parse_iso
 
 # Wie viele Zeilen in welche Größe passen, ohne dass Nest abschneiden muss.
 LIST_ROWS = {"2x2": 3, "3x2": 4, "4x2": 4, "6x2": 4}
@@ -255,6 +255,57 @@ def offers(engine: Engine, size: str | None) -> dict[str, Any]:
     return {"kind": "cards", "state": "ok", "items": items}
 
 
+DEAL_VERDICTS = ("top", "gut", "verdaechtig")
+FRESH = timedelta(hours=24)
+MEDIA_ITEMS = {"2x2": 4, "3x2": 6, "4x2": 8, "6x2": 12}
+
+
+def is_deal(m: Match) -> bool:
+    """Ein Deal: laut Bewertung gut/top/verdächtig -- ohne Bewertung jeder gemeldete Treffer."""
+    v = (m.listing.assessment or {}).get("verdict")
+    return v in DEAL_VERDICTS if v else not m.silent
+
+
+def is_new(m: Match) -> bool:
+    return bool(not m.silent and m.first_seen and (now() - m.first_seen) < FRESH)
+
+
+def gallery(engine: Engine, size: str | None) -> dict[str, Any]:
+    """Die Galerie (Nest-Widget-Art ``media``): Bildkacheln, Deals zuerst, dann Neues."""
+    if not engine.searches:
+        return {"kind": "media", "state": "empty", "items": [],
+                "message": "Noch keine Suche angelegt – in den Plugin-Einstellungen eine Zeile hinzufügen."}
+    matches = engine.recent_matches(limit=60, include_silent=True)
+    matches.sort(key=lambda m: (not is_deal(m), not is_new(m)))  # stabil: innerhalb neueste zuerst
+    items, seen = [], set()
+    for m in matches:
+        if m.key in seen:  # dieselbe Anzeige in zwei Suchen: nur eine Kachel
+            continue
+        seen.add(m.key)
+        l = m.listing
+        a = l.assessment or {}
+        item = {"id": m.key, "title": a.get("summary") or l.title,
+                "subtitle": " · ".join(x for x in (l.price_text, l.location) if x),
+                "meta": " · ".join(x for x in (l.source_label, ago(m.first_seen)) if x), "url": l.url}
+        if l.image_url:
+            item["image"] = image_path(m.key)
+        if a.get("verdict"):
+            item["badge"] = SHORT_VERDICT.get(a["verdict"], a["verdict"])
+            item["badgeTone"] = CARD_TONE.get(a["verdict"], "info")
+        elif l.price_before and l.price and l.price_before > l.price:
+            item["badge"] = f"−{round((1 - l.price / l.price_before) * 100)} %"
+            item["badgeTone"] = "ok"
+        elif is_new(m):
+            item["badge"], item["badgeTone"] = "Neu", "info"
+        items.append(item)
+        if len(items) == MEDIA_ITEMS.get(size or "", 12):
+            break
+    if not items:
+        return {"kind": "media", "state": "empty", "items": [],
+                "message": "Noch keine passenden Angebote – die Suchen laufen."}
+    return {"kind": "media", "state": "ok", "items": items}
+
+
 def restock(engine: Engine, size: str | None) -> dict[str, Any]:
     """Shop-Verfügbarkeit der Zelda-Edition (und was sonst beobachtet wird)."""
     rows = engine.store.restock_rows()
@@ -292,4 +343,5 @@ WIDGETS = {
     "prices": prices,
     "restock": restock,
     "offers": offers,
+    "gallery": gallery,
 }

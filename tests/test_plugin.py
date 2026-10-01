@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from nest_plugin.store import Store
 from nest_plugin.widgets import WIDGETS
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PAYLOAD_KINDS = {"stat", "list", "table", "chart", "progress", "status", "cards"}
+PAYLOAD_KINDS = {"stat", "list", "table", "chart", "progress", "status", "cards", "media"}
 STATES = {"ok", "warn", "empty", "error", "loading"}
 
 
@@ -199,7 +200,7 @@ def _check_payload(p: dict):
         assert p["items"] and all(i.get("id") and i.get("title") for i in p["items"])
     if p["kind"] == "status" and state in ("ok", "warn"):
         assert p["label"] and all(c.get("label") and c.get("state", "ok") in STATES for c in p["checks"])
-    if p["kind"] == "cards" and state in ("ok", "warn"):
+    if p["kind"] in ("cards", "media") and state in ("ok", "warn"):
         import re
         for i in p["items"]:
             assert i.get("id") and i.get("title")
@@ -232,10 +233,10 @@ def test_every_widget_payload_is_valid_before_and_after_a_run(rig):
 def test_manifest_matches_widgets_and_contract():
     assert MANIFEST["apiVersion"] == "nest.plugin/v1"
     ids = {w["id"] for w in MANIFEST["widgets"]}
-    assert ids == set(WIDGETS) | {"gallery"}  # gallery ist iframe, hat keinen Payload-Builder
+    assert ids == set(WIDGETS)
     for w in MANIFEST["widgets"]:
         assert w.get("defaultSize") in w["sizes"]
-    assert "widgets:iframe" in MANIFEST["scopes"]
+    assert MANIFEST["scopes"] == ["notify"]  # genau das Label nest.plugin.scopes
     assert set(MANIFEST["settings"]["properties"]["searches"]) >= {"type", "items"}
 
 
@@ -267,15 +268,29 @@ def test_http_contract(rig, tmp_path):
         assert post("/nest/v1/settings/changed", {"settings": {"searches": ["neu"]}}) == {"ok": True}
         assert [s.query for s in engine.searches] == ["neu"]
         assert post("/nest/v1/actions/test-notify", {})["ok"] is True
+        # Die eigene Website: "/" ist die Vollseite, Links und Bilder liegen an der Wurzel
         status, html = get("/")
-        assert status == 200 and "Tracker" in html
-        # Launcher-Kachel öffnet "/" als eigenen Tab -> Vollseite statt Widget
-        widget_html = html
-        req = urllib.request.Request(base + "/", headers={"Sec-Fetch-Dest": "document"})
-        with urllib.request.urlopen(req) as r:
-            page_html = r.read().decode()
-        assert "<footer>" in page_html and "<footer>" not in widget_html
-        assert "?layout=page" in widget_html  # Widget verlinkt auf die Vollseite
+        assert status == 200 and "<footer>" in html and "<nav class=nav>" in html
+        assert "href='/?v=suchen'" in html and "layout=" not in html
+        assert "plugins/frame" not in html and "postMessage" not in html
+        # Schreiben geht direkt an den eigenen Server
+        assert post("/api/edit", {"op": "archive", "key": "ebay:1"}) == {
+            "ok": True, "message": "Archiviert", "level": "success", "refresh": ["gallery", "searches", "overview"]}
+        assert engine.store.archive_count() == 1
+        assert post("/api/edit", {"op": "rm-rf"})["ok"] is False
+        # ... aber nicht von einer fremden Seite aus
+        req = urllib.request.Request(base + "/api/edit", data=b'{"op":"unarchive","all":true}', method="POST",
+                                     headers={"Origin": "https://evil.example"})
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(req)
+        assert denied.value.code == 403 and engine.store.archive_count() == 1
+        own = urllib.request.Request(base + "/api/edit", data=b'{"op":"unarchive","all":true}', method="POST",
+                                     headers={"Origin": base})
+        with urllib.request.urlopen(own) as r:
+            assert json.loads(r.read())["ok"] is True
+        assert engine.store.archive_count() == 0
+        # Die frühere Nest-Aktion "edit" gibt es nicht mehr
+        assert post("/nest/v1/actions/edit", {"op": "archive", "key": "ebay:1"})["ok"] is False
         status, html = get("/go/ebay%3A1")
         assert "https://www.ebay.de/itm/1" in html
         assert "Angebot nicht gefunden" in get("/go/nope")[1]
@@ -406,16 +421,3 @@ def test_stored_matches_are_rechecked_with_current_rules(rig):
     engine.run_once()
     keys = {m.key for m in engine.store.recent_matches(limit=10, include_silent=True)}
     assert keys == {"ebay:1"}
-
-
-# ---------------------------------------------------------------- Pfad-Modus
-def test_frame_base_accepts_nests_full_mount():
-    """Nest schickt den vollen Mount; wird er verworfen, zeigt jeder Link auf
-    `/` -- Nests Startseite hinter Authelia, im Frame "Verbindung abgelehnt"."""
-    from nest_plugin.frame import frame_base
-
-    h = "X-Nest-Frame-Base"
-    assert frame_base({h: "/plugins/frame/arthur-tracker/"}) == "/plugins/frame/arthur-tracker/"
-    assert frame_base({h: "/arthur-tracker/"}) == "/arthur-tracker/"
-    for bad in ("", "/", "//", "/plugins/frame/", "/x/y/", "/Evil/", "plugins/frame/a/", "/plugins/frame/a/b/"):
-        assert frame_base({h: bad}) == "", bad

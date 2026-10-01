@@ -1,5 +1,5 @@
 # Tracker als Nest-Plugin. Ein Container, ein Port: Nest ruft /nest/v1/* über
-# das Docker-Netz, der Browser sieht die Galerie über den Plugin-Host.
+# das Docker-Netz, der Browser sieht die Website über Caddy (eigene Domain).
 #
 #   docker compose build                               # mit Browser (Stufe 2, siehe sources/fetch.py)
 #   docker compose build --build-arg WITH_BROWSER=0    # schlank: nur HTTP, ~800 MB kleiner

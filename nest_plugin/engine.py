@@ -331,7 +331,9 @@ class Engine:
     def refresh_from_nest(self) -> None:
         """Beim Start: die echten Einstellungen holen (Passwortfelder unmaskiert, §5.4)."""
         if not self.client.configured:
-            self.nest_status = "Kein Plugin-Token – Benachrichtigungen sind aus"
+            reason = {"pending": "Rechte in Nest noch nicht akzeptiert", "unreachable": "Nest nicht erreichbar"}.get(
+                getattr(self.client, "claim_error", None) or "", "Kein Token von Nest")
+            self.nest_status = f"{reason} – Benachrichtigungen sind aus"
             return
         try:
             view = self.client.self_view()

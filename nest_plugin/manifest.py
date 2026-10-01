@@ -1,10 +1,10 @@
-"""Das Manifest (nest.plugin/v1, PLUGIN-API §2).
+"""Das Manifest (nest.plugin/v1): Widgets, Aktionen, Einstellungen.
 
-Scopes sind absichtlich nur zwei: ``notify`` (der Zweck des Ganzen) und
-``widgets:iframe`` (die Galerie). Kein ``http:outbound`` -- das betrifft nur
-Aufrufe *durch* Nests API; ein Docker-Plugin, das selbst nach eBay geht,
-braucht ihn nicht (§12.5 "Egress auf OSI-Ebene"). Kein ``storage:kv`` -- der
-Zustand liegt in einer SQLite-Datei auf dem eigenen Volume.
+Die Rechte fordert seit Plugins v2 die Compose-Datei an (Label
+``nest.plugin.scopes``); ``scopes`` hier ist nur der Rückfall und nennt dasselbe:
+``notify``, der Zweck des Ganzen. Kein ``http:outbound`` -- das betrifft nur
+Aufrufe *durch* Nests API; ein Docker-Plugin, das selbst nach eBay geht, braucht
+ihn nicht. Kein ``storage:kv`` -- der Zustand liegt in SQLite auf dem eigenen Volume.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ MANIFEST = {
     "author": "Arthur",
     "icon": "icons/tracker.svg",
     "runtime": {"kind": "docker", "port": 8080},
-    "scopes": ["notify", "widgets:iframe"],
+    "scopes": ["notify"],
     "widgets": [
         {
             "id": "overview", "kind": "stat", "name": "Neue Treffer", "title": "Tracker",
@@ -69,16 +69,13 @@ MANIFEST = {
             "sizes": ["2x2", "3x2", "4x2"], "defaultSize": "3x2", "refreshSeconds": 300,
         },
         {
-            "id": "gallery", "kind": "iframe", "name": "Galerie", "title": "Tracker",
-            "description": "Die Angebote mit Bildern, nach Suche filterbar; Klick öffnet das Angebot.",
-            "sizes": ["4x2", "6x2"], "defaultSize": "6x2",
+            "id": "gallery", "kind": "media", "name": "Galerie", "title": "Tracker",
+            "description": "Die Angebote als Bildkacheln, Deals zuerst; Klick öffnet das Angebot.",
+            "sizes": ["2x2", "3x2", "4x2", "6x2"], "defaultSize": "6x2", "refreshSeconds": 120,
         },
     ],
     "actions": [
         {"id": "check-now", "name": "Jetzt prüfen", "title": "Jetzt prüfen"},
-        # Nur für die eigene Seite (nest:action): Suchen anlegen/ändern, archivieren.
-        # Kein Knopf in Nest, und nie "danger" -- ein Frame hat keine Rückfrage.
-        {"id": "edit", "name": "Seite bearbeiten", "frame": True},
         {"id": "test-notify", "name": "Testbenachrichtigung", "title": "Testbenachrichtigung senden"},
         {"id": "reset", "name": "Verlauf zurücksetzen", "title": "Verlauf zurücksetzen", "danger": True,
          "confirm": "Alle gemerkten Angebote vergessen? Der nächste Lauf meldet nichts, er merkt sich nur neu."},

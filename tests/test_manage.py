@@ -6,7 +6,7 @@ from datetime import timedelta
 import pytest
 
 from ebay_tracker.sources import MultiSource
-from nest_plugin import frame, manage, manual
+from nest_plugin import manage, manual, webui
 from nest_plugin.dsl import parse_line
 from nest_plugin.engine import Engine
 from nest_plugin.manifest import MANIFEST
@@ -103,9 +103,9 @@ def test_custom_searches_survive_settings_update(rig):
     assert [p.origin for p in engine.parsed] == ["nest", "custom"]
 
 
-def test_frame_action_is_declared_and_safe():
-    edit_action = next(a for a in MANIFEST["actions"] if a["id"] == "edit")
-    assert edit_action.get("frame") is True and not edit_action.get("danger")
+def test_edit_is_no_nest_action_any_more():
+    """Die Seite schreibt selbst (POST /api/edit); eine Frame-Aktion lehnt Nest ab."""
+    assert "edit" not in {a["id"] for a in MANIFEST["actions"]}
 
 
 def test_unknown_op_is_refused(rig):
@@ -195,7 +195,7 @@ def test_every_view_renders(rig, view):
     ebay.items = [item("ebay", i, price=p) for i, p in enumerate([100, 300, 310, 320, 500], start=1)]
     engine.run_once()
     engine.store.archive(["ebay:3"], reason="von Hand", auto=False)
-    html = frame.page(engine, {"layout": "page", "v": view})
+    html = webui.page(engine, {"v": view})
     assert "<nav class=nav>" in html and "Tracker" in html
     if view == "suchen":
         assert "data-op=search-save" in html and "Nest-Einstellung" in html
@@ -207,7 +207,7 @@ def test_every_view_renders(rig, view):
 
 def test_edit_form_prefills_nest_search_as_takeover(rig):
     engine, _, _ = rig
-    html = frame.page(engine, {"v": "suchen", "edit": "Thinkpad"})
+    html = webui.page(engine, {"v": "suchen", "edit": "Thinkpad"})
     assert "data-replaces='Thinkpad'" in html and "value='600'" in html
 
 
@@ -233,8 +233,7 @@ def test_manual_search_runs_and_saves(rig):
     keys = st["results"]
     assert keys == ["ebay:4", "ebay:3", "ebay:1"]  # billigste zuerst
     # Ergebnisse als Karten, ohne Archive-Konflikt
-    from nest_plugin import frame
-    html = frame.page(engine, {"v": "suche"})
+    html = webui.page(engine, {"v": "suche"})
     assert "ebay:4" in html or "450" in html
     # Als echte Suche speichern
     assert manual_edit(engine, op="manual-save", line=run["line"])["ok"]

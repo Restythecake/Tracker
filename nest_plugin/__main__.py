@@ -13,7 +13,7 @@ from ebay_tracker.sources.fetch import BROWSER
 
 from .engine import Engine
 from .nest_client import NestClient
-from .server import serve, wait_for_settings
+from .server import serve
 from .store import Store
 
 
@@ -33,12 +33,17 @@ def main() -> int:
     # Fingerabdrücke der Trefferkarten für Scraplings Selbstheilung (sources/parsing.py)
     parsing.configure(str(data_dir / "scrapling.db") if parsing.HAS_SELECTOR else None)
     store = Store(data_dir / "tracker.db")
-    client = NestClient(token=persisted_token(data_dir))
+    # Bis 0.9 lag der Token auf dem Volume. Er kommt jetzt per Claim und bleibt im Speicher.
+    (data_dir / ".nest-token").unlink(missing_ok=True)
+    client = NestClient()
     engine = Engine(store, client)
     httpd = serve(engine, port, data_dir)
 
+    stop = threading.Event()
+
     def shutdown(*_):
         log.info("Beende …")
+        stop.set()
         engine.stop()
         BROWSER.close()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
@@ -46,37 +51,14 @@ def main() -> int:
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    # Einstellungen holen, bevor der erste Lauf startet -- im Hintergrund,
-    # damit Nests Manifest-Abfrage beim Discovery nicht auf Nest selbst wartet.
-    threading.Thread(target=wait_for_settings, args=(engine,), daemon=True).start()
+    # Token holen und danach die Einstellungen -- im Hintergrund: lehnt Nest ab
+    # (Rechte noch nicht akzeptiert, Nest nicht erreichbar), läuft der Tracker
+    # trotzdem und versucht es jede Minute wieder.
+    threading.Thread(target=client.keep_claimed, args=(stop, engine.refresh_from_nest), daemon=True).start()
     engine.start()
-    log.info("Tracker-Plugin %s lauscht auf :%d (Token: %s)", engine_version(), port,
-             "ja" if client.configured else "nein")
+    log.info("Tracker-Plugin %s lauscht auf :%d", engine_version(), port)
     httpd.serve_forever()
     return 0
-
-
-def persisted_token(data_dir: Path) -> str:
-    """Token aus der Umgebung, sonst der zuletzt gesehene vom Volume.
-
-    Nest schreibt den Token per apply-token in die Container-Umgebung. Ein
-    `docker compose up --build` baut den Container aber aus der Compose-Datei
-    neu -- ohne Token. Ihn auf dem eigenen Volume zu merken heißt: ein Deploy
-    braucht keine Token-Rotation mehr. Datei 0600, nur für den Plugin-User."""
-    path = data_dir / ".nest-token"
-    token = os.environ.get("NEST_PLUGIN_TOKEN", "").strip()
-    if token:
-        try:
-            if not path.exists() or path.read_text().strip() != token:
-                path.write_text(token)
-                path.chmod(0o600)
-        except OSError:
-            pass
-        return token
-    try:
-        return path.read_text().strip()
-    except OSError:
-        return ""
 
 
 def engine_version() -> str:

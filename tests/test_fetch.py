@@ -296,9 +296,9 @@ def test_fetcher_settings_global_and_per_source():
 
 
 # ------------------------------------------------------------------ Anzeige
-def test_source_stats_line_in_widget_and_frame(monkeypatch):
+def test_source_stats_line_in_widget_and_page(monkeypatch):
     from ebay_tracker.sources import fetch
-    from nest_plugin import frame, widgets
+    from nest_plugin import webui, widgets
 
     stats = FetchStats()
     stats.bump("ebay", requests=17, http_ok=12, rescued=5)
@@ -309,7 +309,7 @@ def test_source_stats_line_in_widget_and_frame(monkeypatch):
         {"label": "eBay", "detail": "12 ok · 5 per Browser gerettet · 0 gesperrt", "state": "ok"},
         {"label": "Vinted", "detail": "0 ok · 0 per Browser gerettet · 2 gesperrt", "state": "error"},
     ]
-    assert "5 per Browser gerettet" in frame._sources_section()
+    assert "5 per Browser gerettet" in webui._sources_section()
     assert fetch.STATS is not stats  # globale Statistik unberührt
 
 

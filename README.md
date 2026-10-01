@@ -18,12 +18,21 @@ Läuft auf zwei Arten:
 ## Als Nest-Plugin
 
 ```bash
-deploy/install.sh
+docker compose up -d --build     # oder deploy/install.sh (wartet zusätzlich auf Health)
 ```
 
-Baut das Image, startet `nest-tracker` (Label `nest.plugin=1`, Netz `nest_default`, Volume
-`tracker-data`), installiert und gibt das Plugin in Nest frei und lässt Nest den Token selbst in den
-Container schreiben (`apply-token`). Danach:
+Der Tracker ist eine normale Compose-App (`nest-tracker`, Netze `nest_default` und `proxy`, Volume
+`tracker-data`), die zusätzlich Nest-Plugin ist (Nest „Plugins v2“, ab 0.10):
+
+- **Rechte** stehen als Labels in `docker-compose.yml` (`nest.plugin.scopes: "notify"`). Nest erkennt den
+  Container von selbst; neue Rechte akzeptiert man einmal in Nest (Rechtsklick auf die Kachel →
+  Plugin-Einstellungen). Kein Installationsschritt.
+- **Token**: holt sich der Tracker selbst per `POST $NEST_PLUGIN_URL/claim` (beim Start, bei jedem 401 und
+  jede Minute, solange Nest ablehnt). Er liegt nur im Speicher, nichts steht in `.env`.
+- **Website**: `https://tracker.mini.shibusa.moe` (Label `nest.app.url`, Caddy → `nest-tracker:8080`,
+  hinter Authelia). Die Kachel in Nest öffnet sie in einem neuen Tab.
+
+Danach:
 
 - **Suchen** bearbeiten: Nest → Einstellungen → Plugins → Tracker → Einstellungen. Eine Zeile pro Suche:
 
@@ -57,24 +66,24 @@ Container schreiben (`apply-token`). Danach:
   „Zustand Neu" (Händler-PCs). Zusätzlich Vergleich mit den selbst beobachteten Preisen je GPU.
 
 - **Widgets** auf dem Desktop: *Neue Treffer* (stat), *Neueste Treffer* (list), *Suchen* (status),
-  *Angebote* (table), *Preisverlauf* (chart) und *Galerie* (iframe mit Bildern; „Alles ansehen ↗“
-  öffnet die Vollbild-Seite).
-- **Vollbild-Seite** (`nest_plugin/frame.py`, ab 0.8 im Nest-Look): KPI-Karten, „Beste Deals“ als
-  große Karten, Suchen mit Preis-Sparkline, Kachelraster aller Treffer, Quellen-Statistik. Folgt dem
-  Nest-Theme (hell/dunkel), ohne Build-Schritt – reines serverseitiges HTML/CSS.
-- **Seiten & Bearbeiten** (ab 0.9, `nest_plugin/manage.py`): Reiter *Übersicht · Billig · Mittel · Teuer ·
+  *Angebote* (cards/table), *Preisverlauf* (chart), *Zelda Restock* (status) und *Galerie* (media:
+  Bildkacheln mit Preis, Ort und Urteil, Deals zuerst). Alle zeichnet Nest nativ; Bilder holt Nest
+  über seinen Asset-Proxy von `/img/<quelle>-<id>`.
+- **Website** (`nest_plugin/webui.py`, im Nest-Look): KPI-Karten, „Beste Deals“ als große Karten,
+  Suchen mit Preis-Sparkline, Kachelraster aller Treffer, Quellen-Statistik. Hell/dunkel folgt dem
+  System, ohne Build-Schritt – reines serverseitiges HTML/CSS.
+- **Seiten & Bearbeiten** (`nest_plugin/manage.py`): Reiter *Übersicht · Billig · Mittel · Teuer ·
   (Verdächtig) · Suchen · Archiv*. Preisklasse = Urteil gegen Marktwert, ohne Bewertung Preis gegen den Median
   der Suche (≤ 85 % billig, ≥ 115 % teuer). Unter *Suchen* eigene Suchen per Formular anlegen/bearbeiten/pausieren;
   Suchen aus Nests Einstellungen lassen sich pausieren, ausblenden oder als eigene übernehmen.
   *Archiv*: Knopf auf jeder Karte, plus automatisch (älter als 14 Tage, „teuer“ nach 48 h, 48 h nicht mehr
   gesehen = vermutlich verkauft; taucht es wieder auf, kommt es zurück). Von Hand Archiviertes meldet nie wieder.
-  Geschrieben wird über die Frame-Aktion `edit` (`"frame": true`), die Nest per `nest:action` unter dem
-  angemeldeten Benutzer auslöst – der Frame selbst bleibt read-only. Braucht Nest ≥ 6b6e570.
+  Geschrieben wird per `POST /api/edit` an den Tracker selbst (nur von der eigenen Origin).
 - **Manuelle Suche** (ab 0.9.1, `nest_plugin/manual.py`): Suchleiste im Kopf. Enter startet einmalig über alle
   eingerichteten Quellen, im Hintergrund (Thread), ohne Beobachtung und ohne Meldung. Die Seite *Suche* zeigt
   den Lauf live (aktualisiert sich alle 3 s, bis er fertig ist), dann die Treffer billigste zuerst; „Als Suche
   speichern" macht daraus eine echte (dauerhaft beobachtete) Suche. Zuletzt 5 Suchen bleiben als Chips aufrufbar.
-- **Aktionen** auf der Plugin-Seite: *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
+- **Aktionen** in Nest (Widget-Menü, Plugin-Einstellungen): *Jetzt prüfen*, *Testbenachrichtigung*, *Verlauf zurücksetzen*.
 - **Push**: jeder neue Treffer einzeln (Tippen öffnet das Angebot), ab `max_notifications` pro Lauf
   eine Sammelmeldung. Neue oder geänderte Suchen lesen erst still ein – pro Quelle, damit ein
   gesperrtes eBay beim ersten Lauf später keine Flut auslöst.
@@ -86,7 +95,7 @@ bei jedem Lauf Otto (Suchseite), MediaMarkt/Saturn (Produktseite), Amazon (Buybo
 (queue-it) und wird über „Warteschlange aktiv“ erkannt — der ist im Widget-Text, nicht als
 eigener Check. Eigene Shop-URLs: Einstellung „Restock: Shop-URLs“ (eine URL oder JSON je Zeile).
 
-Was beim Bauen über Nests Plugin-API aufgefallen ist: [docs/nest-plugin-bericht.md](docs/nest-plugin-bericht.md).
+Was beim Bauen über Nests Plugin-API (v1, vor dem Umbau) aufgefallen ist: [docs/nest-plugin-bericht.md](docs/nest-plugin-bericht.md).
 
 ## Abruf: HTTP zuerst, Browser bei Sperre (Scrapling, ab 0.7)
 
