@@ -15,13 +15,24 @@ Läuft auf zwei Arten:
 - Benachrichtigung per **ntfy** (Push aufs Handy), **Telegram**, **Discord**, **E-Mail** und Konsole
 - Datenquelle: offizielle **eBay Browse API** (empfohlen) oder ohne Keys direkt die eBay-Suchseite
 
+## Eigenständig laufen lassen (Container)
+
+```bash
+git clone https://github.com/Restythecake/Tracker.git && cd Tracker
+docker compose up -d --build
+# Weboberfläche: http://localhost:8085
+```
+
+Der Port liegt auf localhost; wer von anderen Geräten zugreifen will, passt die `ports`-Zeile in
+`docker-compose.yml` an.
+
 ## Als Nest-Plugin
 
 ```bash
 docker compose up -d --build     # oder deploy/install.sh (wartet zusätzlich auf Health)
 ```
 
-Der Tracker ist eine normale Compose-App (`nest-tracker`, Netze `nest_default` und `proxy`, Volume
+Der Tracker ist eine normale Compose-App (`nest-tracker`, Volume
 `tracker-data`), die zusätzlich Nest-Plugin ist (Nest „Plugins v2“, ab 0.10):
 
 - **Rechte** stehen als Labels in `docker-compose.yml` (`nest.plugin.scopes: "notify"`). Nest erkennt den
@@ -29,8 +40,9 @@ Der Tracker ist eine normale Compose-App (`nest-tracker`, Netze `nest_default` u
   Plugin-Einstellungen). Kein Installationsschritt.
 - **Token**: holt sich der Tracker selbst per `POST $NEST_PLUGIN_URL/claim` (beim Start, bei jedem 401 und
   jede Minute, solange Nest ablehnt). Er liegt nur im Speicher, nichts steht in `.env`.
-- **Website**: `https://tracker.mini.shibusa.moe` (Label `nest.app.url`, Caddy → `nest-tracker:8080`,
-  hinter Authelia). Die Kachel in Nest öffnet sie in einem neuen Tab.
+- **Website**: per Label `nest.app.url` setzen (die URL, die Nest beim Kachel-Klick öffnet; im eigenen
+  Setup etwa hinter Reverse Proxy + Auth). Liegt Nest in einem eigenen Compose-Netz, ergänzt man die
+  Netze in einer `docker-compose.override.yml` und lässt Nest automatisch finden.
 
 Danach:
 

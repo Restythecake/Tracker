@@ -1,39 +1,36 @@
-# Tracker: eine normale Compose-App, die zusätzlich Nest-Plugin ist.
+# Tracker: eBay-/Kleinanzeigen-Beobachter als selbstständige Compose-App.
 #
 #   docker compose up -d --build
 #
-# Nest erkennt den Container an den Labels von selbst; die Rechte stehen in
-# nest.plugin.scopes und werden in Nest akzeptiert (Plugin-Einstellungen). Den
+# Der Container baut das Python-Backend, hält die Daten im Volume `tracker-data`
+# und stellt die Weboberfläche auf http://localhost:8085 bereit (intern 8080).
+#
+# Nest-Plugin: Die Labels machen den Tracker zu einem Nest-Plugin (Nest
+# „Plugins v2", ab 0.10). Nest erkennt den Container an den Labels von selbst;
+# die Rechte stehen in nest.plugin.scopes und werden in Nest akzeptiert. Den
 # Token holt sich der Tracker selbst per POST $NEST_PLUGIN_URL/claim -- nichts
-# davon steht in der Umgebung. Die Website liegt hinter Caddy unter nest.app.url.
+# davon steht in der Umgebung oder in einer .env.
+#
+# Läuft der Tracker in einer bestehenden Nest-/Caddy-Umgebung, ergänzt man die
+# Netze per docker-compose.override.yml (siehe README, Abschnitt „Als Nest-Plugin").
 services:
   tracker:
     build: .
     image: nest-tracker:latest
     container_name: nest-tracker
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8085:8080"
     labels:
       nest.plugin: "1"
       nest.plugin.id: arthur.tracker
       nest.plugin.scopes: "notify"
       nest.plugin.port: "8080"
-      nest.app.url: https://tracker.mini.shibusa.moe
     environment:
       NEST_PLUGIN_URL: http://nest:8080/api/plugin/v1
       TZ: Europe/Berlin
     volumes:
       - tracker-data:/data
-    networks:
-      - nest
-      - proxy  # Caddy leitet tracker.mini.shibusa.moe an nest-tracker:8080
 
 volumes:
   tracker-data:
-
-networks:
-  nest:
-    name: nest_default
-    external: true
-  proxy:
-    name: proxy
-    external: true
